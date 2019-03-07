@@ -248,11 +248,8 @@ end
 
 function LegendDataTypes.readdata(
     input::HDF5.DataFile, name::AbstractString,
-    AT::Type{<:AbstractArray{<:StaticVector}}
-)
-    # TODO: Improve implementation (dirty hack)
-    SV = AT.var.ub
-    N = SV.parameters[1].parameters[1][1]
+    AT::Type{<:AbstractArray{<:StaticArray{Tuple{N}}}}
+) where {N}
     data = readdata(input, name, AbstractArray{RealQuantity,2})
     nestedview(data, SVector{N})
 end
