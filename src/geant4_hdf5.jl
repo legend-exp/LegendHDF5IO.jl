@@ -151,6 +151,3 @@ function Base.read(input::G4SIMPLE_HDF5Input)
     )
     return hits
 end
-
-export group_by_evtno
-group_by_evtno(table::TypedTables.Table) = TypedTables.Table(consgroupedview(table[sortperm(table.evtno)].evtno, Tables.columns(table)))
