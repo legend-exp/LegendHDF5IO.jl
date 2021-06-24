@@ -116,8 +116,8 @@ function Base.read(input::G4SIMPLE_HDF5Input)
     evtno = try Int32.(g["event/pages"][:][indices]) catch ; ones(Int32, n_ind) end
     irep = try Int32.(g["iRep/pages"][:][indices]) catch ; ones(Int32, n_ind) end
     detno = try Int32.(g["volID/pages"][:][indices]) catch ; ones(Int32, n_ind) end
-    thit = ( try Float32.(g["t/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"s"
-    edep = ( try Float32.(g["Edep/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"keV"
+    thit = ( try Float32.(g["t/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"ns"
+    edep = ( try Float32.(g["Edep/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"MeV"
 
     x0 = try Float32.(g["x/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
     y0 = try Float32.(g["y/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
@@ -126,7 +126,7 @@ function Base.read(input::G4SIMPLE_HDF5Input)
     pos = [ SVector{3}(([ x0[i], y0[i], z0[i] ] .* u"mm")...) for i in 1:n_ind ]
 
 
-    ekin = ( try Float32.(g["KE_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"keV"# kinetic Energy of track [keV]
+    ekin = ( try Float32.(g["KE/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"MeV" # kinetic Energy of track
     stp = try Int32.(g["step/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # step number
     mom = try Int32.(g["parentID/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # parent id
     trk = try Int32.(g["trackID/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # trk id
