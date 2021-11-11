@@ -207,7 +207,7 @@ end
 
 
 default_datatype(dset::HDF5.Dataset) = AbstractArray{<:RealQuantity,length(size(dset))}
-default_datatype(df::HDF5.H5DataStore) = NamedTuple{(Symbol.(names(df))...,)}
+default_datatype(df::HDF5.H5DataStore) = NamedTuple{(Symbol.(keys(df))...,)}
 
 _size(dset::HDF5.Dataset) = size(dset)
 _size(df::HDF5.H5DataStore) = ()
