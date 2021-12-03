@@ -1,5 +1,6 @@
 name = "LegendHDF5IO"
 uuid = "c9265ca6-b027-5446-b1a4-febfa8dd10b0"
+version = "0.1.0"
 
 [deps]
 ArraysOfArrays = "65a8f2f4-9b39-5baf-92e2-a9cc46fdf018"
@@ -16,11 +17,16 @@ TypedTables = "9d95f2ec-7b3d-5a63-8d20-e2491e220bb9"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [compat]
-julia = "1"
-
-[extras]
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
-StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
-
-[targets]
-test = ["Test"]
+ArraysOfArrays = "0.5"
+ElasticArrays = "1"
+EncodedArrays = "0.2"
+HDF5 = "0.15"
+LegendDataTypes = "0.1"
+RadiationDetectorSignals = "0.1"
+StaticArrays = "0.12, 1.0"
+StatsBase = "0.32, 0.33"
+StructArrays = "0.4, 0.5, 0.6"
+Tables = "0.2, 1.0"
+TypedTables = "1.2"
+Unitful = "1"
+julia = "1.6"
