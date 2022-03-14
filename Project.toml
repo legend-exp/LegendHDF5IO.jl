@@ -19,7 +19,7 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 [compat]
 ArraysOfArrays = "0.5"
 ElasticArrays = "1"
-EncodedArrays = "0.2"
+EncodedArrays = "0.2, 0.3"
 HDF5 = "0.15, 0.16"
 LegendDataTypes = "0.1"
 RadiationDetectorSignals = "0.1"
