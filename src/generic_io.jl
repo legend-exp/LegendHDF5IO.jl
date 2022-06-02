@@ -295,11 +295,13 @@ function LegendDataTypes.writedata(
     nothing
 end
 
+
 function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
-    ::Type{<:Union{RealQuantity,AbstractArray}}
+    T::Type{<:Union{RealQuantity,AbstractArray}}
 )
     dset = input[name]
+    ndims(dset) == ndims(T) || throw(ArgumentError("Dataset has $(ndims(dset)) dimensions but expected $(ndims(T)) from datatype"))
     data = getcontent(dset)#::AT
     units = getunits(dset)
     if units == NoUnits
@@ -557,7 +559,7 @@ function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
     AT::Type{<:AbstractVectorOfSimilarVectors}
 )
-    nestedview(readdata(input, name, AbstractArray{<:RealQuantity}))
+    nestedview(readdata(input, name, AbstractArray{<:RealQuantity,2}))
 end
 
 
