@@ -351,10 +351,10 @@ end
 
 function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractArray{<:Enum}}
-)
+    AT::Type{<:AbstractArray{<:Enum,N}}
+) where N
     ET = AT.body.parameters[1].ub
-    data = readdata(input, name, AbstractArray{RealQuantity})
+    data = readdata(input, name, AbstractArray{RealQuantity,N})
     ET.(data)
 end
 
