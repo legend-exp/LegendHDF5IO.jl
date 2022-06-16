@@ -391,7 +391,7 @@ function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
     AT::Type{<:AbstractArray{<:NTuple}}
 )
-    N = length(size(input[name])) - 1
+    N = length(size(input[name]))
     data = readdata(input, name, AbstractArray{RealQuantity,N})
     SV = AT.var.ub
     L = size(data, 1)
