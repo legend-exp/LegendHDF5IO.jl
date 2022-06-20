@@ -5,7 +5,7 @@ function to_table(x::AbstractVector{<:RDWaveform})
     TypedTables.Table(
         t0 = first.(x.time),
         dt = step.(x.time),
-        values = x.value
+        values = x.signal
     )
 end
 
