@@ -1,6 +1,6 @@
 export LHDataStore, LH5Array
 
-# TODO: check if 'units' is really needed (-> use T directly)
+# TODO: dispatch on Quantity and Real seperatly instead of RealQuantity?
 """
     LH5Array{T, N} <: AbstractArray{T, N}
 
@@ -140,7 +140,7 @@ Base.append!(lh::LH5Array{T, N}, x::AbstractArray{U, N}
     new_size = (old_size[1:N-1]..., old_size[N] + size(x)[N])
 
     ux = unit(eltype(x))
-    x = (lh.units == NoUnits) ? (ux == NoUnits) ? x : ustrip.(x) : ustrip.(T.(x))
+    x = (lh.units == NoUnits) ? (ux == NoUnits) ? x : (x / ux) : (T.(x) / ux)
     from, to = old_size[N] + 1, new_size[N]
     indices = (ArraysOfArrays._ncolons(Val{N-1}())..., from:to)
     HDF5.set_extent_dims(lh.file, new_size)
@@ -226,35 +226,31 @@ be preserved. (see [`HDF5`](@ref))
 LHDataStore(f::AbstractString) = LHDataStore(HDF5.h5open(f, "cw"))
 
 Base.close(f::LHDataStore) = close(f.data_store)
-Base.keys(lh::LHDataStore) = keys(lh.data)
+Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
 
 # write AbstractArray{<:RealQuantity}
 Base.setindex!(output::LHDataStore, v::Union{T, AbstractArray{T, N}}, 
 i::AbstractString, DT::DataType=typeof(v)) where {T<:RealQuantity, N} = begin
-    units = unit(eltype(v))
-    _chunk_size, _max_size = [size(v)...], [size(v)...]
-    # chunks are always divided upon the last dimension of the array
-    _chunk_size[N] = CHUNK_SIZE
-    # set last dimension to -1 so that the last dimension is always extendable
-    _max_size[N] = -1
-    ET = units == NoUnits ? eltype(v) : eltype(v).parameters[1]
-    max_size = Tuple(_max_size)
-    chunk = Tuple(_chunk_size)
-    dset = HDF5.create_dataset(
-        output.data_store, i, ET, (size(v), max_size), chunk=chunk)
-
-    # construct indices in order to select all fields of the newly 
-    # created dataset
-    indices = Base.OneTo.(size(v))
-    if units == NoUnits
-        dset[indices...] = v
-    else
-        dset[indices...] = ustrip(v)
-        setunits!(dset, units)
+    u = unit(eltype(v))
+    if !haskey(output.data_store, i)
+        ET = u == NoUnits ? eltype(v) : eltype(v).parameters[1]
+        max_size = (size(v)[1:end-1]..., -1)
+        chunk = (size(v)[1:end-1]..., CHUNK_SIZE)
+        ds = HDF5.create_dataset(
+            output.data_store, i, ET, (size(v), max_size), chunk=chunk)
+        setdatatype!(ds, DT)
+        (u != NoUnits) && setunits!(ds, u)
     end
-    setdatatype!(dset, DT)
+    ds = output.data_store[i]
+    idxs = range.(1, size(v))
+    ds[idxs...] = (u == NoUnits) ? v : (v / u)
     nothing
+end
+
+# needed to circumvent Array(LH5Array)
+Base.setindex!(ds::HDF5.Dataset, lh::LH5Array, I::HDF5.IndexType...) = begin 
+    ds[I...] = lh[I...]
 end
 
 # write ArrayOfSimilarArrays{<:RealQuantity}
