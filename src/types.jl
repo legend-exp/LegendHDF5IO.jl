@@ -49,8 +49,8 @@ const LVV{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
 const MVV{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, Array{T, L}}
 const RDW{T, U, N} = ArrayOfRDWaveforms{T, U, N, <:VV{T}, MVV{U, 1, 1, 2}}
 const LHRDW{T, U, N} = ArrayOfRDWaveforms{T, U, N, <:VV{T}, LVV{U, 1, 1, 2}}
-const DT2{T} = VectorOfVectors{T, LH5Array{T, 1}, Vector{Int64}, Vector{Tuple{}}}
-const CHUNK_SIZE = 1000
+const CHUNK_SIZE = 10_000
+const LHIndexType = Union{Colon, AbstractRange{Int}}
 
 LH5Array{T}(f::HDF5.Dataset, u::Unitful.Unitlike) where {T} = begin
     LH5Array{T, ndims(f)}(f, u)
@@ -74,7 +74,8 @@ end
 return an `ArraysOfSimilarArrays` where the field `data` is a `LH5Array` 
 (see [`ArraysOfSimilarArrays`](@ref))
 """
-LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
+LH5Array(ds::HDF5.Dataset, 
+::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
     nestedview(LH5Array(ds, AbstractArray{<:RealQuantity}))
 end
 """
@@ -90,7 +91,8 @@ end
 
 return a `Table` where each column is the output of `LH5Array` applied to it.
 """
-LH5Array(ds::HDF5.H5DataStore, ::Type{<:TypedTables.Table{<:NamedTuple{(T)}}}) where T = begin
+LH5Array(ds::HDF5.H5DataStore, ::Type{<:TypedTables.Table{<:NamedTuple{(T)}}}
+) where T = begin
     TypedTables.Table(LH5Array(ds, NamedTuple{T}))
 end
 """
@@ -108,23 +110,28 @@ end
 return a `VectorOfVectors` object where `data` is a `LH5Array` 
 (see [`VectorOfArrays`](@ref))
 """
-LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractVector{<:AbstractVector{<:RealQuantity}}}) = begin
+LH5Array(ds::HDF5.H5DataStore, 
+::Type{<:AbstractVector{<:AbstractVector{<:RealQuantity}}}) = begin
     data = LH5Array(ds["flattened_data"])
     cumulen = LH5Array(ds["cumulative_length"])[:]
     VectorOfVectors(data, _element_ptrs(cumulen))
 end
 
-Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{Union{Int, UnitRange, Colon}, N}
-) where {T<:RealQuantity, N} = begin
-    eltype(lh).(lh.file[idxs...])
+Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
+) where {T, N} = begin
+    dtype = HDF5.datatype(lh.file)
+    val = HDF5.generic_read(lh.file, dtype, T, idxs...)
+    close(dtype)
+    return val
 end
-Base.getindex(lh::LVV{T, M, N}, idxs::Vararg{Union{UnitRange, Colon}, N}
-) where {T<:RealQuantity, M, N} = begin
+
+Base.getindex(lh::LVV{T, M}, idxs::LHIndexType...) where {T, M} = begin
     indices = (ArraysOfArrays._ncolons(Val{M}())..., idxs...)
-    ArrayOfSimilarArrays{T, M}(T.(lh.data.file[indices...]))
+    ArrayOfSimilarArrays{T, M}(lh.data[indices...])
 end
-Base.getindex(lh::LHRDW{T, U, N}, idxs::Vararg{Union{UnitRange, Colon}, N}
-) where {T, U, N} = ArrayOfRDWaveforms((lh.time[idxs...], lh.value[idxs...]))
+
+Base.getindex(lh::LHRDW, idxs::LHIndexType...) = 
+    ArrayOfRDWaveforms((lh.time[idxs...], lh.value[idxs...]))
 
 _inv_element_ptrs(elem_ptr::AbstractVector{<:Integer}) = begin
     UInt32.(elem_ptr .- 1)[2:end]
@@ -132,25 +139,30 @@ end
 
 Base.isassigned(lh::LH5Array, i::Int) = 1 <= i <= length(lh)
 Base.size(lh::T) where T<:LH5Array = size(lh.file)
+Base.elsize(::LH5Array{T}) where T = Base.elsize(Array{T})
 
-Base.append!(lh::LH5Array{T, N}, x::AbstractArray{U, N}
-) where {N, T<:RealQuantity, U<:RealQuantity} = begin
-    old_size = size(lh)
-    @assert old_size[1:N-1] == size(x)[1:N-1] "DimensionMismatch"
-    new_size = (old_size[1:N-1]..., old_size[N] + size(x)[N])
-
-    ux = unit(eltype(x))
-    x = (lh.units == NoUnits) ? (ux == NoUnits) ? x : (x / ux) : (T.(x) / ux)
-    from, to = old_size[N] + 1, new_size[N]
-    indices = (ArraysOfArrays._ncolons(Val{N-1}())..., from:to)
-    HDF5.set_extent_dims(lh.file, new_size)
-    lh.file[indices...] = x
-    lh
+Base.copyto!(dest::AbstractArray, src::LH5Array) = begin
+    indices = ArraysOfArrays._ncolons(Val{ndims(src)}())
+    copyto!(dest, src.file, indices...)
 end
 
-Base.append!(
-dest::VectorOfVectors{T, LH5Array{T, 1}, Vector{Int64}, Vector{Tuple{}}}, 
-src::VectorOfArrays{U, 1}) where {T<:RealQuantity, U<:RealQuantity} = begin
+@inline _ustrip(x::AbstractArray{T}) where T<:Real = x
+@inline _ustrip(x::AbstractArray{T}) where T<:Quantity = 
+    reinterpret(Unitful.numtype(T), x) 
+
+Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
+    x = convert(AbstractArray{T, N}, src)
+    old_size = size(dest)
+    new_size = (old_size[1:N-1]..., old_size[N] + size(src, N))
+    from, to = old_size[N] + 1, new_size[N]
+    indices = (ArraysOfArrays._ncolons(Val{N-1}())..., from:to)
+    HDF5.set_extent_dims(dest.file, new_size)
+    dest.file[indices...] = _ustrip(x)
+    dest
+end
+
+Base.append!(dest::VectorOfVectors{T, LH5Array{T, 1}}, src::VectorOfVectors
+) where T = begin
     if !isempty(src)
         append!(dest.data, src.data)
         ArraysOfArrays.append_elemptr!(dest.elem_ptr, src.elem_ptr)
@@ -229,34 +241,40 @@ Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
 
-# write AbstractArray{<:RealQuantity}
-Base.setindex!(output::LHDataStore, v::Union{T, AbstractArray{T, N}}, 
-i::AbstractString, DT::DataType=typeof(v)) where {T<:RealQuantity, N} = begin
-    u = unit(eltype(v))
-    if !haskey(output.data_store, i)
-        ET = u == NoUnits ? eltype(v) : eltype(v).parameters[1]
-        max_size = (size(v)[1:end-1]..., -1)
-        chunk = (size(v)[1:end-1]..., CHUNK_SIZE)
-        ds = HDF5.create_dataset(
-            output.data_store, i, ET, (size(v), max_size), chunk=chunk)
-        setdatatype!(ds, DT)
-        (u != NoUnits) && setunits!(ds, u)
+# write AbstractArray{<:Real} or <:Real
+Base.setindex!(output::LHDataStore, v::Union{T, AbstractArray{T}}, 
+i::AbstractString, DT::DataType=typeof(v)) where {T<:Real} = begin
+    evntsize = size(v)[1:end-1]
+    dspace = (size(v), (evntsize..., -1))
+    chunk = (evntsize..., CHUNK_SIZE)
+    dtype = HDF5.datatype(T)
+    ds = HDF5.create_dataset(output.data_store, i, dtype, dspace; chunk=chunk)
+    try
+        HDF5.write_dataset(ds, dtype, Array(v))
+        DT != Nothing && setdatatype!(ds, DT)
+    catch exc
+        HDF5.delete_object(ds)
+        rethrow(exc)
+    finally
+        close(ds)
+        close(dtype)
     end
-    ds = output.data_store[i]
-    idxs = range.(1, size(v))
-    ds[idxs...] = (u == NoUnits) ? v : (v / u)
     nothing
 end
 
-# needed to circumvent Array(LH5Array)
-Base.setindex!(ds::HDF5.Dataset, lh::LH5Array, I::HDF5.IndexType...) = begin 
-    ds[I...] = lh[I...]
+# write AbstractArray{<:Quantity} or <:Quantity
+Base.setindex!(output::LHDataStore, 
+v::Union{T, AbstractArray{T}}, i::AbstractString, DT::DataType=typeof(v)
+) where {T<:Quantity}  = begin
+    output[i, DT] = _ustrip(v)
+    setunits!(output.data_store[i], unit(T))
+    nothing
 end
 
 # write ArrayOfSimilarArrays{<:RealQuantity}
 Base.setindex!(output::LHDataStore, v::ArrayOfSimilarArrays{T}, 
 i::AbstractString) where T<:RealQuantity = begin
-output[i, typeof(v)] = flatview(v)
+    output[i, typeof(v)] = flatview(v)
     nothing
 end
 
@@ -290,7 +308,7 @@ Base.setindex!(output::LHDataStore, v::NamedTuple, i::AbstractString) = begin
 end
 
 # write Table
-Base.setindex!(output::LHDataStore, v::Any, i::AbstractString, 
+Base.setindex!(output::LHDataStore, v, i::AbstractString, 
 DT::DataType=typeof(v)) = begin
     Tables.istable(v) || throw(ArgumentError("Value to write, of type "
     *"$(typeof(x)),is not a table"))
