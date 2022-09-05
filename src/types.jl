@@ -133,12 +133,9 @@ end
 Base.getindex(lh::LHRDW, idxs::LHIndexType...) = 
     ArrayOfRDWaveforms((lh.time[idxs...], lh.value[idxs...]))
 
-_inv_element_ptrs(elem_ptr::AbstractVector{<:Integer}) = begin
-    UInt32.(elem_ptr .- 1)[2:end]
-end
-
+_inv_element_ptrs(el_ptr::AbstractVector{<:Int}) = UInt32.(el_ptr .- 1)[2:end]
 Base.isassigned(lh::LH5Array, i::Int) = 1 <= i <= length(lh)
-Base.size(lh::T) where T<:LH5Array = size(lh.file)
+Base.size(lh::LH5Array) = size(lh.file)
 Base.elsize(::LH5Array{T}) where T = Base.elsize(Array{T})
 
 Base.copyto!(dest::AbstractArray, src::LH5Array) = begin
@@ -317,3 +314,5 @@ DT::DataType=typeof(v)) = begin
     setdatatype!(output.data_store[i], DT)
     nothing
 end
+
+Base.show(io::IO, x::LHDataStore) = HDF5.show_tree(io, x.data_store)
