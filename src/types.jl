@@ -7,7 +7,7 @@ Array wrapper for HDF5.Datasets following the LEGEND data format as in ".lh5"
 files. 
 
 An `LH5Array` contains a HDF5.Dataset `file` and Unitful.Unitlike `units` as 
-returned by [`getunits`](@ref)`(file)`. `getindex` and `append!` are supported.
+returned by `getunits`(file)`. `getindex` and `append!` are supported.
 `getindex` essentially falls back to `getindex` for `HDF5.Dataset`s, 
 enabling the user to always read in the desired part of an ondisk array without 
 having to load it in whole beforehand.
@@ -71,7 +71,7 @@ end
     LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}})
 
 return an `ArraysOfSimilarArrays` where the field `data` is a `LH5Array` 
-(see [`ArraysOfSimilarArrays`](@ref))
+(see `ArraysOfSimilarArrays`)
 """
 LH5Array(ds::HDF5.Dataset, 
 ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
@@ -107,7 +107,7 @@ end
     LH5Array(ds::HDF5.DataStore, ::Type{<:AbstractVector{<:AbstractVector{<:RealQuantity}}})
 
 return a `VectorOfVectors` object where `data` is a `LH5Array` 
-(see [`VectorOfArrays`](@ref))
+(see `VectorOfArrays`)
 """
 LH5Array(ds::HDF5.H5DataStore, 
 ::Type{<:AbstractVector{<:AbstractVector{<:RealQuantity}}}) = begin
@@ -229,7 +229,7 @@ end
 
 create a `LHDataStore` object, where `data_store` is an HDF5.file created 
 at path `f` with mode `cw`. If a `HDF5.File` at `f` already exists, the data will 
-be preserved. (see [`HDF5`](@ref))
+be preserved. (see `HDF5`)
 """
 LHDataStore(f::AbstractString) = LHDataStore(HDF5.h5open(f, "cw"))
 
