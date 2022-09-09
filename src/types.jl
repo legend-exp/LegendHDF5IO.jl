@@ -1,6 +1,5 @@
 export LHDataStore, LH5Array
 
-# TODO: dispatch on Quantity and Real seperatly instead of RealQuantity?
 """
     LH5Array{T, N} <: AbstractArray{T, N}
 
@@ -233,6 +232,28 @@ at path `f` with mode `cw`. If a `HDF5.File` at `f` already exists, the data wil
 be preserved. (see [`HDF5`](@ref))
 """
 LHDataStore(f::AbstractString) = LHDataStore(HDF5.h5open(f, "cw"))
+
+"""
+    LHDataStore(f::Funtion, s::AbstractString)
+
+Apply the function `f` to the result of `LHDataStore(s)` and close the 
+resulting `LHDataStore` object. Use with a `do` block:
+
+#Example
+
+    LHDataStore(s) do f
+        f["key"] = [1, 2, 3, 4, 5]
+    end
+"""
+
+LHDataStore(f::Function, s::AbstractString) = begin
+    lhds = LHDataStore(s)
+    try
+       f(lhds) 
+    finally
+        close(lhds)
+    end
+end
 
 Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
