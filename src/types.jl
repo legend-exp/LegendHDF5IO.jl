@@ -224,21 +224,21 @@ mutable struct LHDataStore
 end
 
 """
-    LHDataStore(f::AbstractString)
     LHDataStore(f::HDF5.DataStore)
+    LHDataStore(f::AbstractString, access::AbstractString = "r")
 
-create a `LHDataStore` object, where `data_store` is an HDF5.file created 
-at path `f` with mode `cw`. If a `HDF5.File` at `f` already exists, the data will 
-be preserved. (see `HDF5`)
+create a `LHDataStore` object, where `data_store` is either an 
+`HDF5.file` created at path `f` with mode `access` (default is 
+read-only), or a HDF5.Group. For more info on mode see `HDF5`.
 """
 LHDataStore(f::AbstractString, access::AbstractString = "r") =
     LHDataStore(HDF5.h5open(f, access))
 
 """
-    LHDataStore(f::Funtion, s::AbstractString)
+    LHDataStore(f::Funtion, s::AbstractString, access::AbstractString = "r")
 
-Apply the function `f` to the result of `LHDataStore(s)` and close the 
-resulting `LHDataStore` object. Use with a `do` block:
+Apply the function `f` to the result of `LHDataStore(s, access)` and 
+close the resulting `LHDataStore` object. Use with a `do` block:
 
 #Example
 
@@ -246,7 +246,6 @@ resulting `LHDataStore` object. Use with a `do` block:
         f["key"] = [1, 2, 3, 4, 5]
     end
 """
-
 LHDataStore(f::Function, s::AbstractString, access::AbstractString = "r"
 ) = begin
     lhds = LHDataStore(s, access)
