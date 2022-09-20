@@ -231,7 +231,8 @@ create a `LHDataStore` object, where `data_store` is an HDF5.file created
 at path `f` with mode `cw`. If a `HDF5.File` at `f` already exists, the data will 
 be preserved. (see `HDF5`)
 """
-LHDataStore(f::AbstractString) = LHDataStore(HDF5.h5open(f, "cw"))
+LHDataStore(f::AbstractString, access::AbstractString = "r") =
+    LHDataStore(HDF5.h5open(f, access))
 
 """
     LHDataStore(f::Funtion, s::AbstractString)
@@ -246,8 +247,9 @@ resulting `LHDataStore` object. Use with a `do` block:
     end
 """
 
-LHDataStore(f::Function, s::AbstractString) = begin
-    lhds = LHDataStore(s)
+LHDataStore(f::Function, s::AbstractString, access::AbstractString = "r"
+) = begin
+    lhds = LHDataStore(s, access)
     try
        f(lhds) 
     finally
