@@ -20,14 +20,21 @@ using RadiationDetectorSignals
         LHDataStore(path, "cw") do f
             f["tmp"] = nt
         end
+        # now check if datatypes and values are equal to the original 
+        # data, that was written to tmp.lh5
         LHDataStore(path) do f
             NT = f["tmp"]
             @test keys(NT) == keys(nt)
-            @test NT.data1 == nt.data1
+            @test NT.data1[:] == nt.data1
             for (col1, col2) in zip(columns(NT.data2), columns(nt.data2))
-                println("type: ", typeof(col1))
-                println("\n\n")
-                @test col1[:] == col2[:]
+                if isa(col1, ArrayOfRDWaveforms)
+                   @testset "check if RDWaveforms are equal" begin
+                        @test col1.signal == col2.signal
+                        @test col1.time == col2.time
+                   end
+                else
+                    @test col1 == col2
+                end
             end
         end
     end
