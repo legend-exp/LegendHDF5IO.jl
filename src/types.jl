@@ -130,7 +130,7 @@ Base.getindex(lh::LVV{T, M}, idxs::LHIndexType...) where {T, M} = begin
 end
 
 Base.getindex(lh::LHRDW, idxs::LHIndexType...) = 
-    ArrayOfRDWaveforms((lh.time[idxs...], lh.value[idxs...]))
+    ArrayOfRDWaveforms((lh.time[idxs...], lh.signal[idxs...]))
 
 _inv_element_ptrs(el_ptr::AbstractVector{<:Int}) = UInt32.(el_ptr .- 1)[2:end]
 Base.isassigned(lh::LH5Array, i::Int) = 1 <= i <= length(lh)
@@ -183,8 +183,8 @@ V<:RealQuantity} = begin
     # and then append time information to on disk array 
     src_t0 = first.(src.time)
     src_dt = step.(src.time)
-    dset_t0 = parent(dest.value.data.file)["t0"]
-    dset_dt = parent(dest.value.data.file)["dt"]
+    dset_t0 = parent(dest.signal.data.file)["t0"]
+    dset_dt = parent(dest.signal.data.file)["dt"]
     append!(LH5Array(dset_t0), src_t0)
     append!(LH5Array(dset_dt), src_dt)
     dest
