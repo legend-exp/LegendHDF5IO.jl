@@ -39,11 +39,10 @@ julia> append!(lh, x)   # append those 10 elements to the ondisk array
 """
 mutable struct LH5Array{T, N} <: AbstractArray{T, N}
     file::HDF5.Dataset
-    units::Unitful.Unitlike
 end
 
-const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
 const CHUNK_SIZE = 10_000
+const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
 const LHIndexType = Union{Colon, AbstractRange{Int}}
 const VectorOfRDWaveforms{T, U, VVT, VVU} = ArrayOfRDWaveforms{T, U, 1, VVT, VVU}
 const LH5VoV{T} = VectorOfVectors{T, LH5Array{T, 1}}
@@ -51,10 +50,7 @@ const LH5ArrayOfRDWaveforms{T, U, N, VVT} =
     ArrayOfRDWaveforms{T, U, N, VVT, <:Union{LH5VoV{U}, LH5AoSA{U}}}
 const LH5VectorOfRDWaveforms{T, U} = LH5ArrayOfRDWaveforms{T, U, 1}
 
-LH5Array{T}(f::HDF5.Dataset, u::Unitful.Unitlike) where {T} = begin
-    LH5Array{T, ndims(f)}(f, u)
-end
-LH5Array{T, N}(f::HDF5.Dataset) where {T, N} = LH5Array{T, N}(f, getunits(f))
+LH5Array{T}(f::HDF5.Dataset) where {T} = LH5Array{T, ndims(f)}(f)
 LH5Array(f::Union{HDF5.Dataset, HDF5.H5DataStore}) = LH5Array(f, getdatatype(f))
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:RealQuantity}})
@@ -65,7 +61,7 @@ equal to `eltype(ds) * u`
 LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:RealQuantity}}) = begin
     u = getunits(ds)
     ET = (u == NoUnits) ? eltype(ds) : typeof(eltype(ds)(0) * u)
-    LH5Array{ET}(ds, u)
+    LH5Array{ET}(ds)
 end
 """
     LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}})
