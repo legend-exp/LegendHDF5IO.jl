@@ -65,16 +65,12 @@ using RadiationDetectorSignals
             LHDataStore(path, "cw") do f
                 append!(f["tmp/data1"], aofa2)
                 append!(f["tmp/data2"], tbl)
-                println("size(f[\"tmp/data2\"]) = ", size(f["tmp/data2"]))
             end
 
             # now check if datatypes and values are equal to the data 
             # that was extended in memory
-            println("done appending")
             LHDataStore(path) do f
                 NT = f["tmp"]
-                println("size(nt2.data2) = ", size(nt2.data2))
-                println("size(NT.data2) = ", size(NT.data2))
                 @test keys(NT) == keys(nt2)
                 @test NT.data1[:] == nt2.data1
                 for (col1, col2) in zip(columns(NT.data2), columns(nt2.data2))
