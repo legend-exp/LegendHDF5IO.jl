@@ -42,14 +42,14 @@ mutable struct LH5Array{T, N} <: AbstractArray{T, N}
     units::Unitful.Unitlike
 end
 
-const V{T} = AbstractVector{<:T}
-const VV{T} = AbstractVector{<:AbstractVector{T}}
-const LVV{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
-const MVV{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, Array{T, L}}
-const RDW{T, U, N} = ArrayOfRDWaveforms{T, U, N, <:VV{T}, MVV{U, 1, 1, 2}}
-const LHRDW{T, U, N} = ArrayOfRDWaveforms{T, U, N, <:VV{T}, LVV{U, 1, 1, 2}}
+const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
 const CHUNK_SIZE = 10_000
 const LHIndexType = Union{Colon, AbstractRange{Int}}
+const VectorOfRDWaveforms{T, U, VVT, VVU} = ArrayOfRDWaveforms{T, U, 1, VVT, VVU}
+const LH5VoV{T} = VectorOfVectors{T, LH5Array{T, 1}}
+const LH5ArrayOfRDWaveforms{T, U, N, VVT} = 
+    ArrayOfRDWaveforms{T, U, N, VVT, <:Union{LH5VoV{U}, LH5AoSA{U}}}
+const LH5VectorOfRDWaveforms{T, U} = LH5ArrayOfRDWaveforms{T, U, 1}
 
 LH5Array{T}(f::HDF5.Dataset, u::Unitful.Unitlike) where {T} = begin
     LH5Array{T, ndims(f)}(f, u)
@@ -97,7 +97,9 @@ end
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:AbstractVector{<:RDWaveform}})
 
-return an `ArrayOfRDWaveforms` where `value` is a `LH5Array` (see ) 
+return an `ArrayOfRDWaveforms` where the field `signal` is either a 
+`VectorOfSimilarVectors` with an `LH5Array` as `data` or `VectorOfVectors` 
+with an `LH5Array` as `data` (see `ArrayOfRDWaveforms` and `ArraysOfArrays`) 
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractVector{<:RDWaveform}}) = begin
     tbl = LH5Array(ds, TypedTables.Table{<:NamedTuple{(:t0, :dt, :values)}})
@@ -106,7 +108,7 @@ end
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:AbstractVector{<:AbstractVector{<:RealQuantity}}})
 
-return a `VectorOfVectors` object where `data` is a `LH5Array` 
+return a `VectorOfVectors` object where `data` is an `LH5Array` 
 (see `VectorOfArrays`)
 """
 LH5Array(ds::HDF5.H5DataStore, 
@@ -124,12 +126,12 @@ Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
     return val
 end
 
-Base.getindex(lh::LVV{T, M}, idxs::LHIndexType...) where {T, M} = begin
+Base.getindex(lh::LH5AoSA{T, M}, idxs::LHIndexType...) where {T, M} = begin
     indices = (ArraysOfArrays._ncolons(Val{M}())..., idxs...)
     ArrayOfSimilarArrays{T, M}(lh.data[indices...])
 end
 
-Base.getindex(lh::LHRDW, idxs::LHIndexType...) = 
+Base.getindex(lh::LH5ArrayOfRDWaveforms, idxs::LHIndexType...) = 
     ArrayOfRDWaveforms((lh.time[idxs...], lh.signal[idxs...]))
 
 _inv_element_ptrs(el_ptr::AbstractVector{<:Int}) = UInt32.(el_ptr .- 1)[2:end]
@@ -157,8 +159,7 @@ Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
     dest
 end
 
-Base.append!(dest::VectorOfVectors{T, LH5Array{T, 1}}, src::VectorOfVectors
-) where T = begin
+Base.append!(dest::LH5VoV, src::VectorOfVectors) = begin
     if !isempty(src)
         append!(dest.data, src.data)
         ArraysOfArrays.append_elemptr!(dest.elem_ptr, src.elem_ptr)
@@ -174,9 +175,7 @@ Base.append!(dest::VectorOfVectors{T, LH5Array{T, 1}}, src::VectorOfVectors
     dest
 end
 
-Base.append!(dest::LHRDW{T1, U}, src::RDW{T2, V}
-) where {T1<:RealQuantity, T2<:RealQuantity, U<:RealQuantity, 
-V<:RealQuantity} = begin
+Base.append!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
     # first append values to on-disk array
     StructArrays.foreachfield(append!, dest, src)
 
