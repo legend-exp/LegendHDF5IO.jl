@@ -56,6 +56,7 @@ using RadiationDetectorSignals
             path = joinpath(tmp, "tmp.lh5")
             LHDataStore(path, "cw") do f
                 f["tmp"] = nt
+                keys(f)
             end
 
             # first append data to in-memory-data
