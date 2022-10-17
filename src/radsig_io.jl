@@ -9,16 +9,23 @@ function to_table(x::AbstractVector{<:RDWaveform})
     )
 end
 
+_dtt02range(dt::RealQuantity, t0::RealQuantity, len::Int) =
+    t0 .+ (Int32(0):Int32(len - 1)) .* dt
 
-function _dtt02range(dt::RealQuantity, t0::RealQuantity, values::AbstractVector)
-    # TODO: Handle different units for dt and t0
-    t_idxs = Int32(0):Int32(size(values,1) - 1)
-    t0 .+ t_idxs .* dt
-end
+_dtt02range(dt::AbstractArray, t0::AbstractArray, values) = 
+    _dtt02range(dt[axes(dt)...], t0[axes(t0)...], values)
+
+_dtt02range(dt::Array, t0::Array, values::ArrayOfSimilarArrays) =
+    _dtt02range.(dt, t0, innersize(values)[1])
+
+_dtt02range(dt::Array, t0::Array, values::VectorOfVectors) = 
+    _dtt02range.(dt, t0, diff(values.elem_ptr))
+
+_dtt02range(dt, t0, values) = _dtt02range.(dt, t0, size(values, 1))
 
 function from_table(tbl, ::Type{<:AbstractVector{<:RDWaveform}})
     StructArray{RDWaveform}((
-        _dtt02range.(tbl.dt, tbl.t0, tbl.values),
+        _dtt02range(tbl.dt, tbl.t0, tbl.values),
         tbl.values
     ))
 end
