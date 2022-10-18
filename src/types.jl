@@ -114,6 +114,17 @@ LH5Array(ds::HDF5.H5DataStore,
     VectorOfVectors(data, _element_ptrs(cumulen))
 end
 
+LH5Array(ds::HDF5.H5DataStore, 
+::Type{<:Union{Bool, AbstractArray{<:Bool}}}) = begin
+    nothing
+end
+
+LH5Array(ds::HDF5.H5DataStore, ::Type{<:Histogram}) = begin
+    T = (:Binning, :weights, :isdensity)
+    nt = LH5Array(ds, NamedTuple{T})
+    _nt_to_histogram(nt)
+end
+
 Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
     dtype = HDF5.datatype(lh.file)
@@ -318,6 +329,21 @@ Base.setindex!(output::LHDataStore, v::NamedTuple, i::AbstractString) = begin
     for k in keys(v)
         output[i*"/$(String(k))"] = v[k]
     end
+    nothing
+end
+
+# write Bool Array
+Base.setindex!(output::LHDataStore, v::Union{Bool, AbstractArray{Bool}}, 
+i::AbstractString) = begin
+   data = UInt8.(v)
+   output[i, typeof(v)] = data
+   nothing 
+end
+
+# write Histogram
+Base.setindex!(output::LHDataStore, v::Histogram, i::AbstractString) = begin
+    output[i] = _histogram_to_nt(v)
+    setdatatype!(output.data_store[i], typeof(v))
     nothing
 end
 
