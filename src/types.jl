@@ -53,15 +53,47 @@ const LH5VectorOfRDWaveforms{T, U} = LH5ArrayOfRDWaveforms{T, U, 1}
 LH5Array{T}(f::HDF5.Dataset) where {T} = LH5Array{T, ndims(f)}(f)
 LH5Array(f::Union{HDF5.Dataset, HDF5.H5DataStore}) = LH5Array(f, getdatatype(f))
 """
-    LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:RealQuantity}})
+    LH5Array(ds::HDF5.Dataset, ::Type{<:RealQuantity})
+
+return a value with type `RealQuantity`
+"""
+LH5Array(ds::HDF5.Dataset, ::Type{<:RealQuantity}) = begin
+    u = getunits(ds)
+    v = read(ds)
+    (u == NoUnits) ? v : v * u
+end
+"""
+    LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray})
 
 return a `LH5Array` with dimensions equal to that of `ds` and element type 
 equal to `eltype(ds) * u`
 """
-LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:RealQuantity}}) = begin
+LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray}) = begin
     u = getunits(ds)
     ET = (u == NoUnits) ? eltype(ds) : typeof(eltype(ds)(0) * u)
     LH5Array{ET}(ds)
+end
+"""
+    LH5Array(ds::HDF5.H5DataStore, ::Type{<:Bool}) = begin
+
+return a value with type Bool
+"""
+LH5Array(ds::HDF5.Dataset, ::Type{<:Bool}) = begin
+    units = getunits(ds)
+    units == NoUnits || throw(ErrorExceptions("Can't interpret dataset with units as Bool values"))
+    data = getcontent(ds)
+    data > 0
+end
+"""
+    LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Bool}}) = begin
+
+return a `LH5Array` with dimensions equal to that of `ds` and element type 
+`Bool`. Applying `getindex!` on `LH5Array{Bool}` will yield a BitArray.
+"""
+LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Bool}}) = begin
+    units = getunits(ds)
+    units == NoUnits || throw(ErrorExceptions("Can't interpret dataset with units as Bool values"))
+    LH5Array{Bool}(ds)
 end
 """
     LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}})
@@ -70,26 +102,23 @@ return an `ArraysOfSimilarArrays` where the field `data` is a `LH5Array`
 (see `ArraysOfSimilarArrays`)
 """
 LH5Array(ds::HDF5.Dataset, 
-::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
+::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) =
     nestedview(LH5Array(ds, AbstractArray{<:RealQuantity}))
-end
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:NamedTuple{T}}) where T
 
 return a `NamedTuple` where each `field` is the output of `LH5Array` applied to it.
 """
-LH5Array(ds::HDF5.H5DataStore, ::Type{<:NamedTuple{T}}) where T = begin
+LH5Array(ds::HDF5.H5DataStore, ::Type{<:NamedTuple{T}}) where {T} =
     NamedTuple{T}(LH5Array.([ds[k] for k in String.(T)]))
-end
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:TypedTables.Table{<:NamedTuple{(T)}}}) where T
 
 return a `Table` where each column is the output of `LH5Array` applied to it.
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:TypedTables.Table{<:NamedTuple{(T)}}}
-) where T = begin
+) where T =
     TypedTables.Table(LH5Array(ds, NamedTuple{T}))
-end
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:AbstractVector{<:RDWaveform}})
 
@@ -113,17 +142,27 @@ LH5Array(ds::HDF5.H5DataStore,
     cumulen = LH5Array(ds["cumulative_length"])[:]
     VectorOfVectors(data, _element_ptrs(cumulen))
 end
+""""
+    LH5Array(ds::HDF5.H5DataStore, ::Type{<:Histogram{<:RealQuantity}})
 
-LH5Array(ds::HDF5.H5DataStore, 
-::Type{<:Union{Bool, AbstractArray{<:Bool}}}) = begin
-    nothing
-end
-
-LH5Array(ds::HDF5.H5DataStore, ::Type{<:Histogram}) = begin
-    T = (:Binning, :weights, :isdensity)
+return a `Histogram`. 
+"""
+LH5Array(ds::HDF5.H5DataStore, ::Type{<:Histogram{<:RealQuantity}}) = begin
+    T = (:binning, :weights, :isdensity)
     nt = LH5Array(ds, NamedTuple{T})
+    nt = (
+        binning=nt.binning,
+        weights=Array(nt.weights),
+        isdensity=nt.isdensity
+    )
     _nt_to_histogram(nt)
 end
+"""
+    LH5Array(ds::HDF5.Dataset, ::Type{<:String})
+
+return a String object.
+"""
+LH5Array(ds::HDF5.Dataset, ::Type{<:String}) = read(ds)
 
 Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
@@ -131,6 +170,14 @@ Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
     val = HDF5.generic_read(lh.file, dtype, T, idxs...)
     close(dtype)
     return val
+end
+
+Base.getindex(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
+) where {N} = begin
+    dtype = HDF5.datatype(lh.file)
+    val = HDF5.generic_read(lh.file, dtype, Bool, idxs...)
+    close(dtype)
+    return val .> 0
 end
 
 Base.getindex(lh::LH5AoSA{T, M}, idxs::LHIndexType...) where {T, M} = begin
@@ -142,9 +189,7 @@ Base.getindex(lh::LH5ArrayOfRDWaveforms, idxs::LHIndexType...) =
     ArrayOfRDWaveforms((lh.time[idxs...], lh.signal[idxs...]))
 
 _inv_element_ptrs(el_ptr::AbstractVector{<:Int}) = UInt32.(el_ptr .- 1)[2:end]
-Base.isassigned(lh::LH5Array, i::Int) = 1 <= i <= length(lh)
 Base.size(lh::LH5Array) = size(lh.file)
-Base.elsize(::LH5Array{T}) where T = Base.elsize(Array{T})
 
 Base.copyto!(dest::AbstractArray, src::LH5Array) = begin
     indices = ArraysOfArrays._ncolons(Val{ndims(src)}())
@@ -266,9 +311,25 @@ Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
 
-# write AbstractArray{<:Real} or <:Real
-Base.setindex!(output::LHDataStore, v::Union{T, AbstractArray{T}}, 
-i::AbstractString, DT::DataType=typeof(v)) where {T<:Real} = begin
+# write <:Real
+Base.setindex!(output::LHDataStore, v::T, i::AbstractString, 
+DT::DataType=typeof(v)) where {T<:Real} = begin
+    output.data_store[i] = v
+    DT != Nothing && setdatatype!(output.data_store[i], DT)
+    nothing
+end
+
+# write <:Quantity
+Base.setindex!(output::LHDataStore, v::T, i::AbstractString, 
+DT::DataType=typeof(v)) where {T<:Quantity} = begin
+    output[i, DT] = ustrip(v)
+    setunits!(output.data_store[i], unit(T))
+    nothing
+end
+
+# write AbstractArray{<:Real}
+Base.setindex!(output::LHDataStore, v::AbstractArray{T}, i::AbstractString, 
+DT::DataType=typeof(v)) where {T<:Real} = begin
     evntsize = size(v)[1:end-1]
     dspace = (size(v), (evntsize..., -1))
     chunk = (evntsize..., CHUNK_SIZE)
@@ -287,10 +348,9 @@ i::AbstractString, DT::DataType=typeof(v)) where {T<:Real} = begin
     nothing
 end
 
-# write AbstractArray{<:Quantity} or <:Quantity
-Base.setindex!(output::LHDataStore, 
-v::Union{T, AbstractArray{T}}, i::AbstractString, DT::DataType=typeof(v)
-) where {T<:Quantity}  = begin
+# write AbstractArray{<:Quantity}
+Base.setindex!(output::LHDataStore, v::AbstractArray{T}, i::AbstractString, 
+DT::DataType=typeof(v)) where {T<:Quantity}  = begin
     output[i, DT] = _ustrip(v)
     setunits!(output.data_store[i], unit(T))
     nothing
@@ -325,10 +385,12 @@ i::AbstractString) = begin
 end
 
 # write NamedTuple 
-Base.setindex!(output::LHDataStore, v::NamedTuple, i::AbstractString) = begin
+Base.setindex!(output::LHDataStore, v::NamedTuple, i::AbstractString, 
+DT::DataType=typeof(v)) = begin
     for k in keys(v)
         output[i*"/$(String(k))"] = v[k]
     end
+    setdatatype!(output.data_store[i], DT)
     nothing
 end
 
@@ -342,7 +404,14 @@ end
 
 # write Histogram
 Base.setindex!(output::LHDataStore, v::Histogram, i::AbstractString) = begin
-    output[i] = _histogram_to_nt(v)
+    output[i, typeof(v)] = _histogram_to_nt(v)
+    nothing
+end
+
+# write String
+Base.setindex!(output::LHDataStore, v::AbstractString, i::AbstractString
+) = begin 
+    output.data_store[i] = v
     setdatatype!(output.data_store[i], typeof(v))
     nothing
 end
@@ -353,8 +422,7 @@ DT::DataType=typeof(v)) = begin
     Tables.istable(v) || throw(ArgumentError("Value to write, of type "
     *"$(typeof(x)),is not a table"))
     cols = Tables.columns(v)
-    output[i] = cols
-    setdatatype!(output.data_store[i], DT)
+    output[i, typeof(v)] = Tables.columns(v)
     nothing
 end
 

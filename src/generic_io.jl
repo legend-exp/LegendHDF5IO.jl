@@ -74,6 +74,10 @@ function datatype_from_string(s::AbstractString) where L_dset
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
                 AbstractArray{<:T,N}
+            elseif tp == "histogram"
+                length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
+                N = dims[1]
+                Histogram{<:T, N}
             else
                 throw(ErrorException("Unknown datatype \"$tp\""))
             end
@@ -116,7 +120,8 @@ datatype_to_string(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
 
 datatype_to_string(::Type{<:TypedTables.Table{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
 
-
+datatype_to_string(::Type{<:Histogram{T, N}}) where {T, N} = 
+    "histogram<$N>$(_inner_datatype_to_string(T))"
 
 function _eltype(dset::HDF5.Dataset)
     dtype = HDF5.datatype(dset)
