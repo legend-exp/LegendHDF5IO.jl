@@ -3,9 +3,17 @@ using Unitful
 using TypedTables
 using ArraysOfArrays
 using RadiationDetectorSignals
+using StatsBase
 
 @testset "test wrapper" begin
     @testset "reading and writing" begin
+        v = rand()
+        w = v * u"W"
+        z = rand(Bool)
+        s = "Test String"
+        h = fit(Histogram, (rand(10), rand(10)), (0:0.2:1, Float64[0, 0.5, 1]))
+        data3 = (v=v, w=w, z=z, s=s, h=h)
+        boolarray = rand(Bool, 50)
         x = rand(50)
         y = x*u"J"
         vofv1 = VectorOfVectors(fill(x, 50))
@@ -14,8 +22,10 @@ using RadiationDetectorSignals
         aofa2 = nestedview(rand(UInt16, 50, 50)*u"m")
         trng = range(0.0u"μs", 10.0u"μs"; length=50)
         waveform = ArrayOfRDWaveforms((fill(trng, 50), aofa2))
-        tbl = Table((a=x, b=y, c=vofv1, d=vofv2, e=aofa1, f=waveform))
-        nt = (data1=aofa2, data2=tbl)
+        waveform2 = ArrayOfRDWaveforms((fill(trng, 50), vofv1))
+        tbl = Table((a=x, b=y, c=vofv1, d=vofv2, e=aofa1, f=waveform, 
+        g=waveform2, h=boolarray))
+        nt = (data1=aofa2, data2=tbl, data3=data3)
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
             LHDataStore(path, "cw") do f
@@ -26,13 +36,16 @@ using RadiationDetectorSignals
             LHDataStore(path) do f
                 NT = f["tmp"]
                 @test keys(NT) == keys(nt)
-                @test NT.data1[:] == nt.data1
+                @test NT.data1 == nt.data1
+                @testset "test first named tuple" begin
+                    for k=keys(data3) @test nt.data3[k] == NT.data3[k] end
+                end
                 for (col1, col2) in zip(columns(NT.data2), columns(nt.data2))
                     if isa(col1, ArrayOfRDWaveforms)
-                    @testset "check if RDWaveforms are equal" begin
-                            @test col1.signal == col2.signal
-                            @test col1.time == col2.time
-                    end
+                        @testset "check if RDWaveforms are equal" begin
+                                @test col1[:].signal == col2.signal
+                                @test col1[:].time == col2.time
+                        end
                     else
                         @test col1 == col2
                     end

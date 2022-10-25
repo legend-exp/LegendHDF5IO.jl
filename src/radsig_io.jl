@@ -21,6 +21,7 @@ _dtt02range(dt::Array, t0::Array, values::ArrayOfSimilarArrays) =
 _dtt02range(dt::Array, t0::Array, values::VectorOfVectors) = 
     _dtt02range.(dt, t0, diff(values.elem_ptr))
 
+# fallback to default implementation if values is just an array
 _dtt02range(dt, t0, values) = _dtt02range.(dt, t0, size(values, 1))
 
 function from_table(tbl, ::Type{<:AbstractVector{<:RDWaveform}})
