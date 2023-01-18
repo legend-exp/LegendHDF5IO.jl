@@ -11,7 +11,7 @@ const default_compression = ("shuffle", (), "deflate", 3)
 const datatype_regexp = r"""^(([A-Za-z_]*)(<([0-9,]*)>)?)(\{(.*)\})?$"""
 const arraydims_regexp = r"""^<([0-9,]*)>$"""
 
-function _eldatatype_from_string(s::Union{Nothing,AbstractString}) where L_dset
+function _eldatatype_from_string(s::Union{Nothing,AbstractString})
     if s == nothing || s == ""
         RealQuantity
     else
@@ -27,7 +27,7 @@ Base.@propagate_inbounds _tuple_droplast(x::NTuple{N,Any}, ::Val{M}) where {N,M}
 _namedtuple_type(members::AbstractVector{<:AbstractString}) = NamedTuple{(Symbol.(members)...,)}
 
 
-function datatype_from_string(s::AbstractString) where L_dset
+function datatype_from_string(s::AbstractString)
     if s == "real"
         RealQuantity
     elseif s == "bool"
@@ -154,7 +154,7 @@ end
 
 function hasattribute(
     obj::Union{HDF5.Dataset, HDF5.H5DataStore}, key::Symbol
-) where {T<:Union{AbstractString,Real}}
+)
     key_str = String(key)
     attributes = HDF5.attributes(obj)
     haskey(attributes, key_str)
@@ -250,7 +250,7 @@ function _getcontent_impl(dset::HDF5.Dataset, idxs::NTuple{N,Colon}, axs::NTuple
     read(dset)
 end
 
-function _getcontent_impl(dset::HDF5.Dataset, idxs::Tuple{Integer}, axs::NTuple{0}) where {N}
+function _getcontent_impl(dset::HDF5.Dataset, idxs::Tuple{Integer}, axs::NTuple{0})
     idxs == (1,) || Base.throw_boundserror(dset, idxs)
     read(dset)
 end
@@ -498,7 +498,7 @@ function LegendDataTypes.writedata(
     output::HDF5.H5DataStore, name::AbstractString,
     x::VectorOfEncodedArrays{T,1,C},
     fulldatatype::DataType = typeof(x)
-) where {T,N,C}
+) where {T,C}
     codec = first(x.codec)
     @inbounds for c in x.codec
         c != codec && throw("Can't write VectorOfEncodedArrays that has non-uniform codec parameters")
