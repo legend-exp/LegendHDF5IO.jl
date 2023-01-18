@@ -56,7 +56,7 @@ function LegendDataTypes.writedata(
     output::HDF5.H5DataStore, name::AbstractString,
     x::Histogram,
     fulldatatype::DataType = typeof(x)
-) where {T}
+)
     @assert fulldatatype == typeof(x)
     writedata(output, name, _histogram_to_nt(x))
 end
