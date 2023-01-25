@@ -74,6 +74,10 @@ function datatype_from_string(s::AbstractString)
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
                 AbstractArray{<:T,N}
+            elseif tp == "encoded_array"
+                length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
+                N = dims[1]
+                EncodedArray{<:T,N}
             elseif tp == "histogram"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
@@ -107,14 +111,14 @@ datatype_to_string(::Type{NTuple{N,T}}) where {N,T} = "ntuple$(_inner_datatype_t
 datatype_to_string(::Type{<:AbstractArray{T,N}}) where {T,N} =
     "array<$N>$(_inner_datatype_to_string(T))"
 
+datatype_to_string(::Type{<:EncodedArray{T,N}}) where {T,N} =
+    "encoded_array<$N>$(_inner_datatype_to_string(T))"
+
 datatype_to_string(::Type{<:StaticArray{TPL,T,N}}) where {TPL,T<:RealQuantity,N} =
     "fixedsize_array<$N>$(_inner_datatype_to_string(T))"
 
 datatype_to_string(::Type{<:ArrayOfSimilarArrays{T,M,N}}) where {T,M,N} =
     "array_of_equalsized_arrays<$N,$M>$(_inner_datatype_to_string(T))"
-
-datatype_to_string(::Type{<:VectorOfEncodedArrays{T,N}}) where {T,N} =
-    "array_of_encoded_arrays<1,$N>$(_inner_datatype_to_string(T))"
 
 datatype_to_string(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
 
@@ -519,7 +523,7 @@ end
 
 function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:VectorOfEncodedArrays}
+    AT::Type{<:AbstractArray{<:EncodedArray}}
 )
     data_vec = readdata(input, "$name/encoded_data")
     size_vec_in = readdata(input, "$name/decoded_size")
