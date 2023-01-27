@@ -102,8 +102,11 @@ return an `ArraysOfSimilarArrays` where the field `data` is a `LH5Array`
 (see `ArraysOfSimilarArrays`)
 """
 LH5Array(ds::HDF5.Dataset, 
-::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) =
-    nestedview(LH5Array(ds, AbstractArray{<:RealQuantity}))
+::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
+    A = LH5Array(ds, AbstractArray{<:RealQuantity})
+    D = ndims(A)
+    D == 2 ? nestedview(A) : nestedview(A, Val(D - 1))
+end
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:NamedTuple{T}}) where T
 
@@ -189,7 +192,17 @@ Base.getindex(lh::LH5ArrayOfRDWaveforms, idxs::LHIndexType...) =
     ArrayOfRDWaveforms((lh.time[idxs...], lh.signal[idxs...]))
 
 _inv_element_ptrs(el_ptr::AbstractVector{<:Int}) = UInt32.(el_ptr .- 1)[2:end]
-Base.size(lh::LH5Array) = size(lh.file)
+
+Base.size(lh::LH5Array{T, N}) where {T, N} = begin
+    dspace = HDF5.dataspace(lh.file)
+    try
+        h5_dims = HDF5.API.h5s_get_simple_extent_dims(
+            HDF5.checkvalid(dspace), nothing)
+        return ntuple(i -> @inbounds(Int(h5_dims[N - i + 1])), N)
+    finally
+        close(dspace)
+    end
+end
 
 Base.copyto!(dest::AbstractArray, src::LH5Array) = begin
     indices = ArraysOfArrays._ncolons(Val{ndims(src)}())
