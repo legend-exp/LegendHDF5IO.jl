@@ -33,7 +33,7 @@ end
 function Base.read(input::GEARS_HDF5Input)
 
     function _get_indices_raw(g)
-        len = filter(x->x!=0x00, g["e/pages"][:])
+        len = filter(x->x!=0x00, g["de/pages"][:])
         indices_raw = []
         start = 0
         for i in len
@@ -48,19 +48,19 @@ function Base.read(input::GEARS_HDF5Input)
     h5f = input.hdf5file
     g = h5f["default_ntuples/t/"]
     indices_raw = _get_indices_raw(g)
-    h5_edep = g["e_data/pages"][:]
+    h5_edep = g["de_data/pages"][:]
     indices_non_zero_energies  = filter(i-> sum(h5_edep[i]) > 0.0, indices_raw) # Filters events that don't deposit any energy
     indices = vcat(indices_non_zero_energies...)
     n_ind = length(indices)
 
     evtno = Int32.(vcat([ [j for i in 1:length(indices_non_zero_energies[j])] for j in 1:length(indices_non_zero_energies) ]...))
     detno = try Int32.(g["vlm_data/pages"][:][indices]) catch ; ones(Int32, n_ind) end
-    thit = ( try Float32.(g["t0_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"s"
-    edep = ( try Float32.(g["e_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"keV"
+    thit = ( try Float32.(g["t_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"s"
+    edep = ( try Float32.(g["de_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"keV"
 
-    x0 = try Float32.(g["x0_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
-    y0 = try Float32.(g["y0_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
-    z0 = try Float32.(g["z0_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
+    x0 = try Float32.(g["x_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
+    y0 = try Float32.(g["y_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
+    z0 = try Float32.(g["z_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
 
     pos = [ SVector{3}(([ x0[i], y0[i], z0[i] ] .* u"mm")...) for i in 1:n_ind ]
 
@@ -68,7 +68,7 @@ function Base.read(input::GEARS_HDF5Input)
     ekin = ( try Float32.(g["k_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"keV"# kinetic Energy of track [keV]
     stp = try Int32.(g["stp_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # step number
     l = ( try Float32.(g["l_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end  ) .* u"mm"# step length
-    mom = try Int32.(g["mom_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # parent id
+    mom = try Int32.(g["pid_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # parent id
     trk = try Int32.(g["trk_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # trk id
     pdg = try Int32.(g["pdg_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # particle id
     pro = try Int32.(g["pro_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # process id
