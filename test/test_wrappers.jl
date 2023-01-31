@@ -86,6 +86,14 @@ using StatsBase
             LHDataStore(path) do f
                 NT = f["tmp"]
                 @test keys(NT) == keys(nt2)
+
+                @test haskey(f, "tmp")
+                @test haskey(f, "tmp/data1")
+                @test haskey(f, "tmp/data2")
+                @test !haskey(f, "tmp/data3")
+                @test !haskey(f, "data1")
+                @test !haskey(f, "data2")
+                
                 @test NT.data1[:] == nt2.data1
                 for (col1, col2) in zip(columns(NT.data2), columns(nt2.data2))
                     if isa(col1, ArrayOfRDWaveforms)
