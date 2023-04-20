@@ -1,12 +1,15 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT
 
-
-function to_table(x::AbstractVector{<:RDWaveform})
+function to_table(x::ArrayOfRDWaveforms)
     TypedTables.Table(
         t0 = first.(x.time),
         dt = step.(x.time),
         values = x.signal
     )
+end
+
+function to_table(x::AbstractVector{<:RDWaveform})
+    to_table(ArrayOfRDWaveforms(x))
 end
 
 _dtt02range(dt::RealQuantity, t0::RealQuantity, len::Int) =
