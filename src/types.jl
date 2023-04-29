@@ -255,7 +255,7 @@ Base.append!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
 end
 
 """
-    LHDataStore 
+    LHDataStore <: AbstractDict{String,Any}
 
 Dictionary wrapper for `HDF5.H5DataStore` objects, which were constructed 
 according to the LEGEND data format in ".lh5" files. 
@@ -283,7 +283,7 @@ julia> lhf["new"] = x
 [...]
 ```
 """
-mutable struct LHDataStore
+mutable struct LHDataStore <: AbstractDict{String,Any}
     data_store::HDF5.H5DataStore
 end
 
@@ -324,6 +324,35 @@ Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.haskey(lh::LHDataStore, i::AbstractString) = haskey(lh.data_store, i)
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
+
+Base.length(lh::LHDataStore) = length(keys(lh))
+
+function Base.iterate(lh::LHDataStore)
+    ks = keys(lh)
+    r = iterate(ks)
+    if isnothing(r)
+        return nothing
+    else
+        k, i = r
+        return (k => lh[k], (ks, i))
+    end
+end
+
+function Base.iterate(lh::LHDataStore, state)
+    ks, i_last = state
+    r = iterate(ks, i_last)
+
+    if isnothing(r)
+        return nothing
+    else
+        k, i = r
+        return (k => lh[k], (ks, i))
+    end
+end
+
+Base.show(io::IO, m::MIME"text/plain", lh::LHDataStore) = HDF5.show_tree(io, lh.data_store)
+Base.show(io::IO, lh::LHDataStore) = show(io, MIME"text/plain"(), lh)
+
 
 # write <:Real
 Base.setindex!(output::LHDataStore, v::T, i::AbstractString, 
@@ -439,5 +468,3 @@ DT::DataType=typeof(v)) = begin
     output[i, typeof(v)] = Tables.columns(v)
     nothing
 end
-
-Base.show(io::IO, x::LHDataStore) = HDF5.show_tree(io, x.data_store)
