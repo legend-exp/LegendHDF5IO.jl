@@ -465,6 +465,14 @@ Base.setindex!(output::LHDataStore, v::AbstractString, i::AbstractString
     nothing
 end
 
+# write Symbol
+Base.setindex!(output::LHDataStore, v::Symbol, i::AbstractString
+) = begin 
+    output.data_store[i] = String(v)
+    setdatatype!(output.data_store[i], typeof(v))
+    nothing
+end
+
 # write Table
 Base.setindex!(output::LHDataStore, v, i::AbstractString, 
 DT::DataType=typeof(v)) = begin
