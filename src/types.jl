@@ -163,9 +163,15 @@ end
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:String})
 
-return a String object.
+return a `String`.
 """
 LH5Array(ds::HDF5.Dataset, ::Type{<:String}) = read(ds)
+"""
+    LH5Array(ds::HDF5.Dataset, ::Type{<:Symbol})
+
+return a `Symbol`.
+"""
+LH5Array(ds::HDF5.Dataset, ::Type{<:Symbol}) = Symbol(read(ds))
 
 Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
@@ -463,7 +469,7 @@ end
 Base.setindex!(output::LHDataStore, v, i::AbstractString, 
 DT::DataType=typeof(v)) = begin
     Tables.istable(v) || throw(ArgumentError("Value to write, of type "
-    *"$(typeof(v)),is not a table"))
+    *"$(typeof(v)), is not a table"))
     cols = Tables.columns(v)
     output[i, typeof(v)] = Tables.columns(v)
     nothing
