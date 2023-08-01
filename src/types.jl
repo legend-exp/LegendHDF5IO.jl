@@ -463,7 +463,7 @@ end
 Base.setindex!(output::LHDataStore, v, i::AbstractString, 
 DT::DataType=typeof(v)) = begin
     Tables.istable(v) || throw(ArgumentError("Value to write, of type "
-    *"$(typeof(x)),is not a table"))
+    *"$(typeof(v)),is not a table"))
     cols = Tables.columns(v)
     output[i, typeof(v)] = Tables.columns(v)
     nothing
