@@ -20,6 +20,8 @@ function _eldatatype_from_string(s::Union{Nothing,AbstractString})
 end
 
 
+_ndims(x) = ndims(x)
+_ndims(::Type{<:AbstractArray{<:Any,N}}) where {N} = N
 
 Base.@propagate_inbounds _tuple_droplast(x::NTuple{N,Any}, ::Val{M}) where {N,M} =
     Base.ntuple(i -> x[i], Val{N-M}())
@@ -310,7 +312,7 @@ function LegendDataTypes.readdata(
     T::Type{<:Union{RealQuantity,AbstractArray}}
 )
     dset = input[name]
-    ndims(dset) == ndims(T) || throw(ArgumentError("Dataset has $(ndims(dset)) dimensions but expected $(ndims(T)) from datatype"))
+    _ndims(dset) == _ndims(T) || throw(ArgumentError("Dataset has $(_ndims(dset)) dimensions but expected $(_ndims(T)) from datatype"))
     data = getcontent(dset)#::AT
     units = getunits(dset)
     if units == NoUnits

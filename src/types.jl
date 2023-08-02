@@ -50,7 +50,7 @@ const LH5ArrayOfRDWaveforms{T, U, N, VVT} =
     ArrayOfRDWaveforms{T, U, N, VVT, <:Union{LH5VoV{U}, LH5AoSA{U}}}
 const LH5VectorOfRDWaveforms{T, U} = LH5ArrayOfRDWaveforms{T, U, 1}
 
-LH5Array{T}(f::HDF5.Dataset) where {T} = LH5Array{T, ndims(f)}(f)
+LH5Array{T}(f::HDF5.Dataset) where {T} = LH5Array{T, _ndims(f)}(f)
 LH5Array(f::Union{HDF5.Dataset, HDF5.H5DataStore}) = LH5Array(f, getdatatype(f))
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:RealQuantity})
@@ -104,7 +104,7 @@ return an `ArraysOfSimilarArrays` where the field `data` is a `LH5Array`
 LH5Array(ds::HDF5.Dataset, 
 ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
     A = LH5Array(ds, AbstractArray{<:RealQuantity})
-    D = ndims(A)
+    D = _ndims(A)
     D == 2 ? nestedview(A) : nestedview(A, Val(D - 1))
 end
 """
