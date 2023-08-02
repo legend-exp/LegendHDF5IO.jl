@@ -3,6 +3,7 @@
 using Test
 
 Test.@testset "Package LegendHDF5IO" begin
+    include("arrays/arrays_io.jl")
     include("ranges/range_to_namedtuple.jl")
     include("histograms/histogram_io.jl")
     include("test_wrappers.jl")
