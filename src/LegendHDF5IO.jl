@@ -20,8 +20,7 @@ using LegendDataTypes: readdata, writedata, getunits, setunits!,
     units_from_string, units_to_string,
     read_from_properties, write_to_properties!
 
-using RadiationDetectorSignals: RealQuantity, ArrayOfDims, AosAOfDims, SArrayOfDims,
-    recursive_ndims, ArrayOfRDWaveforms
+using RadiationDetectorSignals: RealQuantity, ArrayOfRDWaveforms
 
 
 include("generic_io.jl")
