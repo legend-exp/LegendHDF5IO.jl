@@ -15,7 +15,7 @@ using Unitful
 
 import HDF5
 import TypedTables
-
+using TypedTables: Table, columns
 using LegendDataTypes: readdata, writedata, getunits, setunits!,
     units_from_string, units_to_string,
     read_from_properties, write_to_properties!

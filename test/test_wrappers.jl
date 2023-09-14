@@ -28,12 +28,12 @@ using StatsBase
         nt = (data1=aofa2, data2=tbl, data3=data3)
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
-            LHDataStore(path, "cw") do f
+            lh5open(path, "cw") do f
                 f["tmp"] = nt
             end
             # now check if datatypes and values are equal to the original 
             # data, that was written to tmp.lh5
-            LHDataStore(path) do f
+            lh5open(path) do f
                 NT = f["tmp"]
                 @test keys(NT) == keys(nt)
                 @test NT.data1 == nt.data1
@@ -67,8 +67,8 @@ using StatsBase
 
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
-            LHDataStore(path, "cw") do f
-                f["tmp"] = nt
+            lh5open(path, "cw") do f
+                f["tmp", 50] = nt
                 keys(f)
             end
 
@@ -76,14 +76,14 @@ using StatsBase
             nt2 = (data1=vcat(aofa2, aofa2), data2=vcat(tbl, tbl))
 
             # append data to on-disk-data
-            LHDataStore(path, "cw") do f
+            lh5open(path, "cw") do f
                 append!(f["tmp/data1"], aofa2)
                 append!(f["tmp/data2"], tbl)
             end
 
             # now check if datatypes and values are equal to the data 
             # that was extended in memory
-            LHDataStore(path) do f
+            lh5open(path) do f
                 NT = f["tmp"]
                 @test keys(NT) == keys(nt2)
 
@@ -105,6 +105,34 @@ using StatsBase
                         @test col1 == col2
                     end
                 end
+            end
+        end
+    end
+    @testset "test adding and removing columns from Tables" begin
+        x, y = rand(10), rand(10)
+        tbl = Table(x=x, y=y)
+        mktempdir(pwd()) do tmp
+            path = joinpath(tmp, "tmp.lh5")
+            lh5open(path, "cw") do lhd
+                lhd["tbl"] = tbl
+                reduce_datastore(lhd, "tbl/y")
+                @test lhd["tbl"][:] == Table(tbl, y=nothing)
+                extend_datastore(lhd, "tbl", Table(y=y))
+                @test lhd["tbl"][:] == tbl
+            end
+        end
+    end
+    @testset "test adding and removing columns from NamedTuples" begin
+        x, y = rand(10), rand(10)
+        nt = (x=x, y=y)
+        mktempdir(pwd()) do tmp
+            path = joinpath(tmp, "tmp.lh5")
+            lh5open(path, "cw") do lhd
+                lhd["nt"] = nt
+                reduce_datastore(lhd, "nt/y")
+                @test lhd["nt"] == (x=x,)
+                extend_datastore(lhd, "nt", (y=y,))
+                @test lhd["nt"] == nt
             end
         end
     end

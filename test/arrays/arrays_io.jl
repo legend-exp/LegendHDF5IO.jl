@@ -1,5 +1,5 @@
 using Unitful
-using LegendHDF5IO: readdata, writedata, LHDataStore
+using LegendHDF5IO: readdata, writedata, lh5open
 using HDF5
 
 @testset "Arrays I/O" begin
@@ -18,7 +18,7 @@ using HDF5
     end
 
     @testset "LHDataStore" begin
-        LHDataStore("array_test.h5") do h5f
+        lh5open("array_test.h5") do h5f
             @test h5f["array_in_keV"][:] == a
             @test h5f["array_no_units"][:] == ustrip.(a)
         end

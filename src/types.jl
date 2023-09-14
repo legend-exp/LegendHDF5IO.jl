@@ -41,7 +41,6 @@ mutable struct LH5Array{T, N} <: AbstractArray{T, N}
     file::HDF5.Dataset
 end
 
-const CHUNK_SIZE = 10_000
 const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
 const LHIndexType = Union{Colon, AbstractRange{Int}}
 const VectorOfRDWaveforms{T, U, VVT, VVU} = ArrayOfRDWaveforms{T, U, 1, VVT, VVU}
@@ -119,9 +118,8 @@ LH5Array(ds::HDF5.H5DataStore, ::Type{<:NamedTuple{T}}) where {T} =
 
 return a `Table` where each column is the output of `LH5Array` applied to it.
 """
-LH5Array(ds::HDF5.H5DataStore, ::Type{<:TypedTables.Table{<:NamedTuple{(T)}}}
-) where T =
-    TypedTables.Table(LH5Array(ds, NamedTuple{T}))
+LH5Array(ds::HDF5.H5DataStore, ::Type{<:Table{<:NamedTuple{(T)}}}) where T = 
+    Table(LH5Array(ds, NamedTuple{T}))
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:AbstractVector{<:RDWaveform}})
 
@@ -130,7 +128,7 @@ return an `ArrayOfRDWaveforms` where the field `signal` is either a
 with an `LH5Array` as `data` (see `ArrayOfRDWaveforms` and `ArraysOfArrays`) 
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractVector{<:RDWaveform}}) = begin
-    tbl = LH5Array(ds, TypedTables.Table{<:NamedTuple{(:t0, :dt, :values)}})
+    tbl = LH5Array(ds, Table{<:NamedTuple{(:t0, :dt, :values)}})
     from_table(tbl, AbstractVector{<:RDWaveform})
 end
 """
@@ -305,6 +303,7 @@ julia> lhf["new"] = x
 """
 mutable struct LHDataStore <: AbstractDict{String,Any}
     data_store::HDF5.H5DataStore
+    usechunks::Bool
 end
 
 @deprecate LHDataStore(f::AbstractString, access::AbstractString = "r") lh5open(f, access)
@@ -345,34 +344,44 @@ end
 Base.show(io::IO, m::MIME"text/plain", lh::LHDataStore) = HDF5.show_tree(io, lh.data_store)
 Base.show(io::IO, lh::LHDataStore) = show(io, MIME"text/plain"(), lh)
 
+Base.setindex!(output::LHDataStore, v, i, chunk_size=nothing) = begin
+    output.usechunks = !isnothing(chunk_size)
+    _setindex!(output, v, i, chunk_size)
+end
 
 # write <:Real
-Base.setindex!(output::LHDataStore, v::T, i::AbstractString, 
-DT::DataType=typeof(v)) where {T<:Real} = begin
+_setindex!(output::LHDataStore, v::T, i::AbstractString, args...
+    ) where {T<:Real} = begin
+
     output.data_store[i] = v
-    DT != Nothing && setdatatype!(output.data_store[i], DT)
-    nothing
+    setdatatype!(output.data_store[i], T)
 end
 
 # write <:Quantity
-Base.setindex!(output::LHDataStore, v::T, i::AbstractString, 
-DT::DataType=typeof(v)) where {T<:Quantity} = begin
-    output[i, DT] = ustrip(v)
+_setindex!(output::LHDataStore, v::T, i::AbstractString, args...
+    ) where {T<:Quantity} = begin
+
+    _setindex!(output, ustrip(v), i)
     setunits!(output.data_store[i], unit(T))
-    nothing
 end
 
 # write AbstractArray{<:Real}
-Base.setindex!(output::LHDataStore, v::AbstractArray{T}, i::AbstractString, 
-DT::DataType=typeof(v)) where {T<:Real} = begin
-    evntsize = size(v)[1:end-1]
-    dspace = (size(v), (evntsize..., -1))
-    chunk = (evntsize..., CHUNK_SIZE)
+_setindex!(output::LHDataStore, v::AbstractArray{T}, i::AbstractString,
+    chunk_size::Union{Nothing, Int}=nothing) where {T<:Real} = begin
+
     dtype = HDF5.datatype(T)
-    ds = HDF5.create_dataset(output.data_store, i, dtype, dspace; chunk=chunk)
+    ds = if isnothing(chunk_size)
+        HDF5.create_dataset(output.data_store, i, dtype, size(v))
+    else
+        @assert chunk_size > 0 "chunk size has to be greater than zero"
+        sizev = size(v)
+        dspace = (sizev, (sizev[begin:end-1]..., -1))
+        chunk = (sizev[begin:end-1]..., chunk_size)
+        HDF5.create_dataset(output.data_store, i, dtype, dspace; chunk=chunk)
+    end
     try
         HDF5.write_dataset(ds, dtype, Array(v))
-        DT != Nothing && setdatatype!(ds, DT)
+        setdatatype!(ds, typeof(v))
     catch exc
         HDF5.delete_object(ds)
         rethrow(exc)
@@ -380,95 +389,83 @@ DT::DataType=typeof(v)) where {T<:Real} = begin
         close(ds)
         close(dtype)
     end
-    nothing
 end
 
 # write AbstractArray{<:Quantity}
-Base.setindex!(output::LHDataStore, v::AbstractArray{T}, i::AbstractString, 
-DT::DataType=typeof(v)) where {T<:Quantity}  = begin
-    output[i, DT] = _ustrip(v)
+_setindex!(output::LHDataStore, v::AbstractArray{T}, i::AbstractString,
+    args...) where {T<:Quantity}  = begin
+
+    _setindex!(output, ustrip(v), i, args...)
+    setdatatype!(output.data_store[i], typeof(v))
     setunits!(output.data_store[i], unit(T))
-    nothing
 end
 
 # write ArrayOfSimilarArrays{<:RealQuantity}
-Base.setindex!(output::LHDataStore, v::ArrayOfSimilarArrays{T}, 
-i::AbstractString) where T<:RealQuantity = begin
-    output[i, typeof(v)] = flatview(v)
-    nothing
+_setindex!(output::LHDataStore, v::ArrayOfSimilarArrays{T}, i::AbstractString,
+    args...) where {T<:RealQuantity} = begin
+
+    _setindex!(output, flatview(v), i, args...)
+    setdatatype!(output.data_store[i], typeof(v))
 end
 
 # write VectorOfVectors{<:RealQuantity}
-Base.setindex!(output::LHDataStore, v::AbstractArray{<:AbstractArray{T, M}, N}, 
-i::AbstractString) where {T<:RealQuantity, M, N} = begin
+_setindex!(output::LHDataStore, v::AbstractArray{<:AbstractArray{T, M}, N}, 
+    i::AbstractString, args...) where {T<:RealQuantity, M, N} = begin
+
     N == 1 || throw(ArgumentError("Output of multi-dimensional arrays of" 
     *" arrays to HDF5 is not supported"))
     # TODO: Support vectors of multi-dimensional arrays
     M == 1 || throw(ArgumentError("Output of vectors of multi-dimensional" 
     *" arrays to HDF5 is not supported"))
-    output["$i/flattened_data"] = flatview(v)
-    output["$i/cumulative_length"] = _cumulative_length(v)
-    setdatatype!(output.data_store["$i"], typeof(v))
-    nothing
+    _setindex!(output, flatview(v), "$i/flattened_data", args...)
+    _setindex!(output, _cumulative_length(v), "$i/cumulative_length", args...)
+    setdatatype!(output.data_store[i], typeof(v))
 end
 
 # write Vector{<:RDWaveforms}
-Base.setindex!(output::LHDataStore, v::AbstractVector{<:RDWaveform}, 
-i::AbstractString) = begin
-    output[i] = to_table(v)
-    nothing
-end
+_setindex!(output::LHDataStore, v::AbstractVector{<:RDWaveform{T, U}}, 
+    i::AbstractString, args...) where {T<:RealQuantity, U<:RealQuantity} = 
+    _setindex!(output, to_table(v), i, args...)
 
 # write NamedTuple 
-Base.setindex!(output::LHDataStore, v::NamedTuple, i::AbstractString, 
-DT::DataType=typeof(v)) = begin
-    for k in keys(v)
-        output[i*"/$(String(k))"] = v[k]
-    end
-    setdatatype!(output.data_store[i], DT)
-    nothing
-end
+_setindex!(output::LHDataStore, v::NamedTuple, i::AbstractString, args...
+    ) = begin
 
-# write Bool Array
-Base.setindex!(output::LHDataStore, v::Union{Bool, AbstractArray{Bool}}, 
-i::AbstractString) = begin
-   data = UInt8.(v)
-   output[i, typeof(v)] = data
-   nothing 
+    for k in keys(v)
+        _setindex!(output, v[k], "$i/$(String(k))", args...)
+    end
+    setdatatype!(output.data_store[i], typeof(v))
 end
 
 # write Histogram
-Base.setindex!(output::LHDataStore, v::Histogram, i::AbstractString) = begin
-    output[i, typeof(v)] = _histogram_to_nt(v)
-    nothing
+_setindex!(output::LHDataStore, v::Histogram, i::AbstractString, args...
+    ) = begin
+
+    _setindex!(output, _histogram_to_nt(v), i, args...)
+    setdatatype!(output.data_store[i], typeof(v))
 end
 
 # write String
-Base.setindex!(output::LHDataStore, v::AbstractString, i::AbstractString
-) = begin 
+_setindex!(output::LHDataStore, v::AbstractString, i::AbstractString, args...
+    ) = begin 
+
     output.data_store[i] = v
     setdatatype!(output.data_store[i], typeof(v))
-    nothing
 end
 
 # write Symbol
-Base.setindex!(output::LHDataStore, v::Symbol, i::AbstractString
-) = begin 
+_setindex!(output::LHDataStore, v::Symbol, i::AbstractString, args...) = begin 
     output.data_store[i] = String(v)
     setdatatype!(output.data_store[i], typeof(v))
-    nothing
 end
 
 # write Table
-Base.setindex!(output::LHDataStore, v, i::AbstractString, 
-DT::DataType=typeof(v)) = begin
+_setindex!(output::LHDataStore, v, i::AbstractString, args...) = begin
     Tables.istable(v) || throw(ArgumentError("Value to write, of type "
     *"$(typeof(v)), is not a table"))
-    cols = Tables.columns(v)
-    output[i, typeof(v)] = Tables.columns(v)
-    nothing
+    _setindex!(output, Tables.columns(v), i, args...)
+    setdatatype!(output.data_store[i], typeof(v))
 end
-
 
 """
     lh5open(filename::AbstractString, access::AbstractString = "r")
@@ -478,7 +475,7 @@ Open a LEGEND HDF5 file and return an `LHDataStore` object.
 LEGEND HDF5 files typically use the file extention ".lh5".
 """
 function lh5open(filename::AbstractString, access::AbstractString = "r")
-    LHDataStore(HDF5.h5open(filename, access))
+    LHDataStore(HDF5.h5open(filename, access), false)
 end
 export lh5open
 
@@ -496,4 +493,82 @@ function lh5open(f::Function, filename::AbstractString, access::AbstractString =
     finally
         close(lhds)
     end
+end
+
+"""
+    extend_datastore(lhd::LHDataStore, i::AbstractString, src::TypedTable.Table, 
+        dest::TypedTable.Table=LH5Array(lhd.data_store[i]))
+
+extend the Table `dest` at `lhd[i]` with columns from `src`.
+"""
+function extend_datastore(lhd::LHDataStore, i::AbstractString, 
+    src::Table, dest::Table=LH5Array(lhd.data_store[i]))
+
+    @assert length(dest) == length(src) "tables are not equal in length"
+    tbl = Table(dest, src)
+    extend_datastore(lhd, i, columns(src), columns(dest))
+    HDF5.rename_attribute(lhd.data_store[i], "datatype", "datatype_old")
+    HDF5.delete_attribute(lhd.data_store[i], "datatype_old")
+    setdatatype!(lhd.data_store[i], typeof(tbl))
+end
+
+"""
+    extend_datastore(lhd::LHDataStore, i::AbstractString, src::NamedTuple, 
+        dest::NamedTuple=LH5Array(lhd.data_store[i]))
+
+extend the NamedTuple `dest` at `lhd[i]` with elements from `src`.
+"""
+function extend_datastore(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
+    dest::NamedTuple=LH5Array(lhd.data_store[i]))
+
+    new_nt = (;dest..., src...)
+    for k in keys(src)
+        lhd[joinpath(i, "$k")] = src[k]
+    end
+    HDF5.rename_attribute(lhd.data_store[i], "datatype", "datatype_old")
+    HDF5.delete_attribute(lhd.data_store[i], "datatype_old")
+    setdatatype!(lhd.data_store[i], typeof(new_nt))
+end
+export extend_datastore
+
+"""
+    reduce_datastore(lhd::LHDataStore, i::AbstractString)
+
+remove the dataset `lhd[i]` and adjust the datatype of the parent if necessary. 
+Currently supported are elements of `NamedTuple`, `TypedTable.Table` or 
+`HDF5.Group`. 
+"""
+function reduce_datastore(lhd::LHDataStore, i::AbstractString)
+    parent, child = splitdir(i)
+    if isempty(parent)
+        HDF5.delete_object(lhd.data_store[i])
+    else
+        _reduce_datastore(lhd, lhd[parent], parent, child)
+    end
+end
+export reduce_datastore
+
+function _reduce_datastore(lhd::LHDataStore, nt::NamedTuple, 
+    parent::AbstractString, child::AbstractString)
+
+    if hasattribute(lhd.data_store[parent], :datatype)
+        newkeys = setdiff(keys(nt), (Symbol(child),))
+        isempty(newkeys) && throw("Empty object at $parent not allowed")
+        new_nt = (;[k => nt[k] for k in newkeys]...)
+        HDF5.rename_attribute(lhd.data_store[parent], "datatype", "datatype_old")
+        HDF5.delete_attribute(lhd.data_store[parent], "datatype_old")
+        setdatatype!(lhd.data_store[parent], typeof(new_nt))
+    end
+    HDF5.delete_object(lhd.data_store[joinpath(parent, child)])
+end
+
+function _reduce_datastore(lhd::LHDataStore, tbl::Table, parent::AbstractString, 
+    child::AbstractString)
+
+    _reduce_datastore(lhd, columns(tbl), parent, child)
+    new_tbl = Table(lhd[parent])
+    # adjust datatype of parent
+    HDF5.rename_attribute(lhd.data_store[parent], "datatype", "datatype_old")
+    HDF5.delete_attribute(lhd.data_store[parent], "datatype_old")
+    setdatatype!(lhd.data_store[parent], typeof(new_tbl))
 end
