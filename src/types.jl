@@ -326,6 +326,7 @@ LHDataStore(f::Function, s::AbstractString, access::AbstractString = "r"
     end
 end
 
+Base.isopen(f::LHDataStore) = isopen(f.data_store)
 Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.haskey(lh::LHDataStore, i::AbstractString) = haskey(lh.data_store, i)
