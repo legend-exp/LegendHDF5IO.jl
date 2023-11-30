@@ -331,6 +331,7 @@ Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.haskey(lh::LHDataStore, i::AbstractString) = haskey(lh.data_store, i)
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
+Base.getindex(lh::LHDataStore, i::Any) = lh[string(i)]
 
 Base.length(lh::LHDataStore) = length(keys(lh))
 
