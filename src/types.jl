@@ -266,6 +266,19 @@ end
 Dictionary wrapper for `HDF5.H5DataStore` objects, which were constructed 
 according to the LEGEND data format in ".lh5" files. 
 
+Constructor:
+
+```julia
+LHDataStore(h5ds::HDF5.DataStore)
+```
+
+This return an `LHDataStore` object that wraps an `h5ds` which will typically
+be an `HDF5.File` be may also be an `HDF5.H5DataStore` (e.g. an `HDF5.Group`).
+in general.
+
+To read or write ".lh5" file directly (without using `HDF5.h5open` first),
+we recommend using [`lh5open`](@ref).
+
 Supports `getindex` and `setindex!` where `getindex(lh::LHDataStore, s)` returns 
 the output of [`LH5Array`](@ref) applied to `data_store[s]` and `setindex!` 
 creates and writes `HDF5.Group`s and `HDF5.Dataset`s using chunks of size 1000 
@@ -280,7 +293,8 @@ index**.
 
 ```julia
 julia> using HDF5
-julia> lhf = LHDataStore("path/to/lhf/file")
+julia> h5ds = h5open("path/to/lhf/file")
+julia> lhf = LHDataStore(h5ds)
 julia> lhf["raw"]
 [...]
 julia> using Unitful
@@ -293,38 +307,8 @@ mutable struct LHDataStore <: AbstractDict{String,Any}
     data_store::HDF5.H5DataStore
 end
 
-"""
-    LHDataStore(f::HDF5.DataStore)
-    LHDataStore(f::AbstractString, access::AbstractString = "r")
-
-create a `LHDataStore` object, where `data_store` is either an 
-`HDF5.file` created at path `f` with mode `access` (default is 
-read-only), or a HDF5.Group. For more info on mode see `HDF5`.
-"""
-LHDataStore(f::AbstractString, access::AbstractString = "r") =
-    LHDataStore(HDF5.h5open(f, access))
-
-"""
-    LHDataStore(f::Funtion, s::AbstractString, access::AbstractString = "r")
-
-Apply the function `f` to the result of `LHDataStore(s, access)` and 
-close the resulting `LHDataStore` object. Use with a `do` block:
-
-#Example
-
-    LHDataStore(s) do f
-        f["key"] = [1, 2, 3, 4, 5]
-    end
-"""
-LHDataStore(f::Function, s::AbstractString, access::AbstractString = "r"
-) = begin
-    lhds = LHDataStore(s, access)
-    try
-       f(lhds) 
-    finally
-        close(lhds)
-    end
-end
+@deprecate LHDataStore(f::AbstractString, access::AbstractString = "r") lh5open(f, access)
+@deprecate LHDataStore(f::Function, s::AbstractString, access::AbstractString = "r") lh5open(f, s, access)
 
 Base.isopen(f::LHDataStore) = isopen(f.data_store)
 Base.close(f::LHDataStore) = close(f.data_store)
@@ -483,4 +467,33 @@ DT::DataType=typeof(v)) = begin
     cols = Tables.columns(v)
     output[i, typeof(v)] = Tables.columns(v)
     nothing
+end
+
+
+"""
+    lh5open(filename::AbstractString, access::AbstractString = "r")
+
+Open a LEGEND HDF5 file and return an `LHDataStore` object.
+
+LEGEND HDF5 files typically use the file extention ".lh5".
+"""
+function lh5open(filename::AbstractString, access::AbstractString = "r")
+    LHDataStore(HDF5.h5open(filename, access))
+end
+export lh5open
+
+"""
+    lh5open(f, filename::AbstractString, access::AbstractString = "r")
+
+Return f(lh5open(f, filename, access)).
+
+Opens and closes the LEGEND HDF5 file `filename` automatically.
+"""
+function lh5open(f::Function, filename::AbstractString, access::AbstractString = "r")
+    lhds = LHDataStore(filename, access)
+    try
+       f(lhds) 
+    finally
+        close(lhds)
+    end
 end
