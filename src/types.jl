@@ -490,7 +490,7 @@ Return f(lh5open(f, filename, access)).
 Opens and closes the LEGEND HDF5 file `filename` automatically.
 """
 function lh5open(f::Function, filename::AbstractString, access::AbstractString = "r")
-    lhds = LHDataStore(filename, access)
+    lhds = lh5open(filename, access)
     try
        f(lhds) 
     finally
