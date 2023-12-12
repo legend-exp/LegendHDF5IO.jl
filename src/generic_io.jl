@@ -124,7 +124,9 @@ datatype_to_string(::Type{<:ArrayOfSimilarArrays{T,M,N}}) where {T,M,N} =
 
 datatype_to_string(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
 
+# ToDo: Make this more generic:
 datatype_to_string(::Type{<:TypedTables.Table{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
+datatype_to_string(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
 
 datatype_to_string(::Type{<:Histogram{T, N}}) where {T, N} = 
     "histogram<$N>$(_inner_datatype_to_string(T))"
