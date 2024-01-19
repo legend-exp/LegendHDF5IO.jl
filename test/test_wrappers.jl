@@ -115,7 +115,7 @@ using StatsBase
             path = joinpath(tmp, "tmp.lh5")
             lh5open(path, "cw") do lhd
                 lhd["tbl"] = tbl
-                reduce_datastore(lhd, "tbl/y")
+                reduce_datastore(lhd, joinpath("tbl", "y"))
                 @test lhd["tbl"][:] == Table(tbl, y=nothing)
                 extend_datastore(lhd, "tbl", Table(y=y))
                 @test lhd["tbl"][:] == tbl
@@ -129,7 +129,7 @@ using StatsBase
             path = joinpath(tmp, "tmp.lh5")
             lh5open(path, "cw") do lhd
                 lhd["nt"] = nt
-                reduce_datastore(lhd, "nt/y")
+                reduce_datastore(lhd, joinpath("nt", "y"))
                 @test lhd["nt"] == (x=x,)
                 extend_datastore(lhd, "nt", (y=y,))
                 @test lhd["nt"] == nt
