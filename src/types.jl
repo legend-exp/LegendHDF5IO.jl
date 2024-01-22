@@ -138,7 +138,7 @@ return a `VectorOfVectors` object where `data` is an `LH5Array`
 (see `VectorOfArrays`)
 """
 LH5Array(ds::HDF5.H5DataStore, 
-::Type{<:AbstractVector{<:AbstractVector{<:RealQuantity}}}) = begin
+::Type{<:AbstractVector{<:AbstractVector}}) = begin
     data = LH5Array(ds["flattened_data"])
     cumulen = LH5Array(ds["cumulative_length"])[:]
     VectorOfVectors(data, _element_ptrs(cumulen))
