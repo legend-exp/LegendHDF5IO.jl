@@ -523,7 +523,7 @@ function extend_datastore(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
 
     new_nt = (;dest..., src...)
     for k in keys(src)
-        lhd[joinpath(i, "$k")] = src[k]
+        lhd["$(i)/$(k)"] = src[k]
     end
     HDF5.rename_attribute(lhd.data_store[i], "datatype", "datatype_old")
     HDF5.delete_attribute(lhd.data_store[i], "datatype_old")
@@ -539,10 +539,11 @@ Currently supported are elements of `NamedTuple`, `TypedTable.Table` or
 `HDF5.Group`. 
 """
 function reduce_datastore(lhd::LHDataStore, i::AbstractString)
-    parent, child = splitdir(i)
-    if isempty(parent)
+    last_slash = findlast('/', i)
+    if isnothing(last_slash) || last_slash == 1
         HDF5.delete_object(lhd.data_store[i])
     else
+        parent, child = i[1:last_slash-1], i[last_slash+1:end]
         _reduce_datastore(lhd, lhd[parent], parent, child)
     end
 end
@@ -559,7 +560,7 @@ function _reduce_datastore(lhd::LHDataStore, nt::NamedTuple,
         HDF5.delete_attribute(lhd.data_store[parent], "datatype_old")
         setdatatype!(lhd.data_store[parent], typeof(new_nt))
     end
-    HDF5.delete_object(lhd.data_store[joinpath(parent, child)])
+    HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
 end
 
 function _reduce_datastore(lhd::LHDataStore, tbl::Table, parent::AbstractString, 
