@@ -67,8 +67,8 @@ using StatsBase
 
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
-            lh5open(path, "cw") do f
-                f["tmp", 50] = nt
+            lh5open(path, "cw"; usechunks=true) do f
+                f["tmp"] = nt
                 keys(f)
             end
 
@@ -115,9 +115,9 @@ using StatsBase
             path = joinpath(tmp, "tmp.lh5")
             lh5open(path, "cw") do lhd
                 lhd["tbl"] = tbl
-                reduce_datastore(lhd, "tbl/y")
+                delete_entry!(lhd, "tbl/y")
                 @test lhd["tbl"][:] == Table(tbl, y=nothing)
-                extend_datastore(lhd, "tbl", Table(y=y))
+                add_entries!(lhd, "tbl", Table(y=y))
                 @test lhd["tbl"][:] == tbl
             end
         end
@@ -129,9 +129,9 @@ using StatsBase
             path = joinpath(tmp, "tmp.lh5")
             lh5open(path, "cw") do lhd
                 lhd["nt"] = nt
-                reduce_datastore(lhd, "nt/y")
+                delete_entry!(lhd, "nt/y")
                 @test lhd["nt"] == (x=x,)
-                extend_datastore(lhd, "nt", (y=y,))
+                add_entries!(lhd, "nt", (y=y,))
                 @test lhd["nt"] == nt
             end
         end
