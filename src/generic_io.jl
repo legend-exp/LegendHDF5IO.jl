@@ -239,11 +239,9 @@ end
 
 function setdatatype!(output::Union{HDF5.Dataset, HDF5.H5DataStore}, datatype::Type)
     dtstr = datatype_to_string(datatype)
-    # @debug "setdatatype!($(_infostring(output)), \"$dtstr\")"
+    hasattribute(output, :datatype) && HDF5.delete_attribute(output, "datatype")
     setattribute!(output, :datatype, dtstr)
 end
-
-
 
 function getinfo(dset::HDF5.Dataset)
     (
