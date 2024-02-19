@@ -345,7 +345,7 @@ Base.show(io::IO, m::MIME"text/plain", lh::LHDataStore) = HDF5.show_tree(io, lh.
 Base.show(io::IO, lh::LHDataStore) = show(io, MIME"text/plain"(), lh)
 
 Base.setindex!(output::LHDataStore, v, i) = 
-    create_entry(output, i, v, chunk_size=output.usechunks)
+    create_entry(output, i, v, usechunks=output.usechunks)
 
 # write <:Real
 function create_entry(parent::LHDataStore, name::AbstractString, data::T; 
@@ -367,19 +367,19 @@ end
 
 # write AbstractArray{<:Real}
 function create_entry(parent::LHDataStore, name::AbstractString, 
-    data::AbstractArray{T}; chunk_size::Union{Bool, Int}=false) where {T<:Real}
+    data::AbstractArray{T}; usechunks::Bool=false) where {T<:Real}
 
     dtype = HDF5.datatype(T)
-    ds = if isa(chunk_size, Bool) && !chunk_size
+    ds = if !usechunks
         HDF5.create_dataset(parent.data_store, name, dtype, size(data))
     else
         data_size = size(data)
-        chsize = isa(chunk_size, Bool) ? data_size[end] : chunk_size
-        @assert chsize > 0 "chunk size has to be greater than zero"
-        dspace = (data_size, (data_size[begin:end-1]..., -1))
-        chunk = (data_size[begin:end-1]..., chsize)
-        HDF5.create_dataset(
-            parent.data_store, name, dtype, dspace; chunk=chunk)
+        sz_inner, sz_outer = data_size[begin:end-1], data_size[end]
+        chunk_size = sz_outer
+        @assert chunk_size > 0 "chunk size has to be greater than zero"
+        dspace = (data_size, (sz_inner..., -1))
+        chunk = (sz_inner..., chunk_size)
+        HDF5.create_dataset(parent.data_store, name, dtype, dspace; chunk=chunk)
     end
     try
         HDF5.write_dataset(ds, dtype, Array(data))
