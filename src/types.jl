@@ -314,7 +314,7 @@ Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.haskey(lh::LHDataStore, i::AbstractString) = haskey(lh.data_store, i)
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
-Base.getindex(lh::LHDataStore, i::Any) = lh[string(i)]
+Base.getindex(lh::LHDataStore, i::Any) = getindex(lh, string(i))
 
 Base.length(lh::LHDataStore) = length(keys(lh))
 
@@ -344,8 +344,14 @@ end
 Base.show(io::IO, m::MIME"text/plain", lh::LHDataStore) = HDF5.show_tree(io, lh.data_store)
 Base.show(io::IO, lh::LHDataStore) = show(io, MIME"text/plain"(), lh)
 
-Base.setindex!(output::LHDataStore, v, i) = 
-    create_entry(output, i, v, usechunks=output.usechunks)
+function Base.setindex!(lh::LHDataStore, v, i::AbstractString)
+    create_entry(lh, i, v, usechunks=lh.usechunks)
+    return v
+end
+
+Base.setindex!(lh::LHDataStore, v, i::Any) = setindex!(lh, v, string(i))
+
+
 
 # write <:Real
 function create_entry(parent::LHDataStore, name::AbstractString, data::T; 
