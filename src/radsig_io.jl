@@ -18,16 +18,20 @@ _dtt02range(dt::RealQuantity, t0::RealQuantity, len::Int) =
 _dtt02range(dt::AbstractArray, t0::AbstractArray, values) = 
     _dtt02range(dt[axes(dt)...], t0[axes(t0)...], values)
 
-_dtt02range(dt::Array, t0::Array, values::ArrayOfSimilarArrays) =
+_dtt02range(dt::Array, t0::Array, values::AbstractArrayOfSimilarArrays) =
     _dtt02range.(dt, t0, innersize(values)[1])
 
 _dtt02range(dt::Array, t0::Array, values::VectorOfVectors) = 
     _dtt02range.(dt, t0, diff(values.elem_ptr))
 
+_dtt02range(dt::Array, t0::Array, values::VectorOfEncodedArrays) = 
+    _dtt02range.(dt, t0, only.(values.innersizes))
+
 # fallback to default implementation if values is just an array
 _dtt02range(dt, t0, values) = _dtt02range.(dt, t0, size(values, 1))
 
 function from_table(tbl, ::Type{<:AbstractVector{<:RDWaveform}})
+    global g_state = tbl
     StructArray{RDWaveform}((
         _dtt02range(tbl.dt, tbl.t0, tbl.values),
         tbl.values
@@ -52,4 +56,3 @@ function LegendDataTypes.readdata(
     tbl = readdata(input, name, TypedTables.Table{<:NamedTuple{(:t0, :dt, :values)}})
     from_table(tbl, AbstractVector{<:RDWaveform})
 end
-

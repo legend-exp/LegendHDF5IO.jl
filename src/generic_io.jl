@@ -66,6 +66,11 @@ function datatype_from_string(s::AbstractString)
                 N = dims[1]; M = dims[2]
                 N != 2 || throw(ErrorException("Only one-dimensional arrays of encoded arrays are supported"))
                 VectorOfEncodedArrays{<:T,dims[1]}
+            elseif tp == "array_of_encoded_equalsized_arrays"
+                length(dims) == 2 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
+                N = dims[1]; M = dims[2]
+                N != 2 || throw(ErrorException("Only one-dimensional arrays of encoded arrays are supported"))
+                VectorOfEncodedSimilarArrays{<:T,dims[1]}
             elseif tp == "fixedsize_array"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
@@ -121,6 +126,12 @@ datatype_to_string(::Type{<:StaticArray{TPL,T,N}}) where {TPL,T<:RealQuantity,N}
 
 datatype_to_string(::Type{<:ArrayOfSimilarArrays{T,M,N}}) where {T,M,N} =
     "array_of_equalsized_arrays<$N,$M>$(_inner_datatype_to_string(T))"
+
+datatype_to_string(::Type{<:VectorOfEncodedArrays{T,N}}) where {T,N} =
+    "array_of_encoded_arrays<1,$N>$(_inner_datatype_to_string(T))"
+
+datatype_to_string(::Type{<:VectorOfEncodedSimilarArrays{T,M}}) where {T,M} =
+    "array_of_encoded_equalsized_arrays<1,$M>$(_inner_datatype_to_string(T))"
 
 datatype_to_string(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
 
@@ -505,13 +516,10 @@ function LegendDataTypes.writedata(
     x::VectorOfEncodedArrays{T,1,C},
     fulldatatype::DataType = typeof(x)
 ) where {T,C}
-    codec = first(x.codec)
-    @inbounds for c in x.codec
-        c != codec && throw("Can't write VectorOfEncodedArrays that has non-uniform codec parameters")
-    end
+    codec = x.codec
 
     writedata(output, "$name/encoded_data", x.encoded)
-    writedata(output, "$name/decoded_size", x.size)
+    writedata(output, "$name/decoded_size", x.innersizes)
  
     dset = output[name]
 
@@ -525,7 +533,7 @@ end
 
 function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractArray{<:EncodedArray}}
+    AT::Type{<:VectorOfEncodedArrays}
 )
     data_vec = readdata(input, "$name/encoded_data")
     size_vec_in = readdata(input, "$name/decoded_size")
@@ -543,16 +551,59 @@ function LegendDataTypes.readdata(
     codec_name = Symbol(getattribute(dset, :codec, String))
     C = LegendDataTypes.array_codecs[codec_name]
     codec = read_from_properties(getattribute, dset, C)
-    n = length(data_vec)
-    codec_vec = StructArray(fill(codec, n)) # ToDo: Improve
 
-    StructArray{EncodedArray{Int32,N,C,Vector{UInt8}}}(
-        (
-            codec_vec,
-            size_vec,
-            data_vec
-        )
-    )
+    # ToDo: How to avoid hardcoding T?
+    T = Int32
+
+    return VectorOfEncodedArrays{T}(codec, size_vec, data_vec)
+end
+
+
+function LegendDataTypes.writedata(
+    output::HDF5.H5DataStore, name::AbstractString,
+    x::VectorOfEncodedSimilarArrays{T,1,C},
+    fulldatatype::DataType = typeof(x)
+) where {T,C}
+    codec = x.codec
+
+    # Limit to vector for encoded vectors for now:
+    innerlen = only(x.innersize)
+
+    writedata(output, "$name/encoded_data", x.encoded)
+    writedata(output, "$name/decoded_size", innerlen)
+ 
+    dset = output[name]
+
+    codec_name = LegendDataTypes.array_codecs[C]
+    setattribute!(dset, :codec, String(codec_name))
+    write_to_properties!(setattribute!, dset, codec)
+
+    setdatatype!(dset, fulldatatype)
+    nothing
+end
+
+function LegendDataTypes.readdata(
+    input::HDF5.H5DataStore, name::AbstractString,
+    AT::Type{<:VectorOfEncodedSimilarArrays}
+)
+    data_vec = readdata(input, "$name/encoded_data")
+
+    # Limit to vector for encoded vectors for now:
+    innerlen = readdata(input, "$name/decoded_size")
+    @assert innerlen isa Integer
+    innersz = (innerlen,)
+    N = 1
+
+    dset = input[name]
+
+    codec_name = Symbol(getattribute(dset, :codec, String))
+    C = LegendDataTypes.array_codecs[codec_name]
+    codec = read_from_properties(getattribute, dset, C)
+
+    # ToDo: How to avoid hardcoding T?
+    T = Int32
+
+    VectorOfEncodedSimilarArrays{T}(codec, innersz, data_vec)
 end
 
 
