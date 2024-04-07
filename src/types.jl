@@ -170,6 +170,75 @@ LH5Array(ds::HDF5.Dataset, ::Type{<:String}) = read(ds)
 return a `Symbol`.
 """
 LH5Array(ds::HDF5.Dataset, ::Type{<:Symbol}) = Symbol(read(ds))
+"""
+    LH5Array(ds::HDF5.Dataset, ::Type{<:Tuple})
+
+return an `Tuple`
+"""
+LH5Array(ds::HDF5.Dataset, ::Type{<:Tuple}) = tuple(LH5Array(ds, Vector)...)
+"""
+    LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Tuple}})
+
+return an Array of NTuples
+"""
+LH5Array(ds::HDF5.Dataset, AT::Type{<:AbstractArray{<:NTuple}}) = begin
+    data = read(ds)
+    SV = AT.var.ub
+    L = size(data, 1)
+    errs(L, M) = "Trying to read array of NTuples of length $M, but inner dimension of data has length $L"
+    if SV isa DataType
+        L_expected = SV.parameters[1].parameters[1][1]
+        L_expected == L || throw(ErrorException(errs(L, L_expected)))
+    end
+    _flatview_to_array_of_ntuple(data, NTuple{L, eltype(data)})
+end
+"""
+    LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractEncodedArray{T, 1} where {T}})
+
+return an EncodedArray
+"""
+LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractEncodedArray{T, 1} where {T}}
+    ) = begin
+
+    data::Vector{UInt8} = read(ds["encoded_data"])
+    size_vec_in::NTuple{1, Int} = LH5Array(ds["size"])
+    U = eltype(ds["sample_data"])
+    codec_name = Symbol(getattribute(ds, :codec, String))
+    C = LegendDataTypes.array_codecs.by_name[codec_name]
+    EncodedArray{U}(C(), size_vec_in, data)
+end
+"""
+    LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedArrays{T, 1} where {T}})
+
+return a VectorOfEncodedArrays
+"""
+LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedArrays{T, 1} where {T}}
+    ) = begin
+    
+    data_vec::VectorOfVectors{UInt8, Vector{UInt8}} = LH5Array(
+        ds["encoded_data"])[:]
+    size_vec::Vector{NTuple{1, Int64}} = LH5Array(ds["decoded_size"])
+    U = eltype(ds["sample_data"])
+    codec_name = Symbol(getattribute(ds, :codec, String))
+    C = LegendDataTypes.array_codecs.by_name[codec_name]
+    VectorOfEncodedArrays{U}(C(), size_vec, data_vec)
+end
+"""
+    LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedSimilarArrays{T, 1} where {T}})
+
+return a VectorOfEncodedSimilarArrays
+"""
+LH5Array(ds::HDF5.H5DataStore, 
+    ::Type{<:VectorOfEncodedSimilarArrays{T, 1} where {T}}) = begin
+
+    data::VectorOfVectors{UInt8, Vector{UInt8}} = LH5Array(
+        ds["encoded_data"])[:]
+    innersize::NTuple{1, Int64} = LH5Array(ds["decoded_size"])
+    U = eltype(ds["sample_data"])
+    codec_name = Symbol(getattribute(ds, :codec, String))
+    C = LegendDataTypes.array_codecs.by_name[codec_name]
+    VectorOfEncodedSimilarArrays{U}(C(), innersize, data)
+end
 
 Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
@@ -478,6 +547,72 @@ function create_entry(parent::LHDataStore, name::AbstractString,
 
     parent.data_store[name] = String(data)
     setdatatype!(parent.data_store[name], typeof(data))
+    nothing
+end
+
+# write NTuple
+function create_entry(parent::LHDataStore, name::AbstractString, 
+    data::T; kwargs...) where {L, U, T <: NTuple{L, U}}
+    
+    create_entry(parent, name, reinterpret(U, [data]); kwargs...)
+    setdatatype!(parent.data_store[name], T)
+    nothing
+end
+
+# write Array{<:NTuple}
+function create_entry(parent::LHDataStore, name::AbstractString, 
+    data::AbstractArray{T, N}; kwargs...) where {N, L, U, T <: NTuple{L, U}}
+
+    create_entry(parent, name, _flatview_of_array_of_ntuple(data); kwargs...)
+    setdatatype!(parent.data_store[name], Array{NTuple{L, U}, N})
+    nothing
+end
+
+# write EncodedArray
+function create_entry(parent::LHDataStore, name::AbstractString, 
+    data::T; kwargs...) where {C, U, T <: EncodedArray{U, 1, C}}
+
+    create_entry(parent, name*"/encoded_data", data.encoded; kwargs...)
+    create_entry(parent, name*"/size", data.size)
+
+    # quick fix for avoiding hardcoding eltype while reading EncodedArray's
+    parent[name*"/sample_data"] = U(1.0) 
+
+    codec_name = LegendDataTypes.array_codecs.by_type[C]
+    setattribute!(parent.data_store[name], :codec, String(codec_name))
+    write_to_properties!(setattribute!, parent.data_store[name], data.codec)
+    setdatatype!(parent.data_store[name], T)
+    nothing
+end
+
+# write VectorOfEncodedArrays
+function create_entry(parent::LHDataStore, name::AbstractString,
+    data::T; kwargs...) where {C, U, T <: VectorOfEncodedArrays{U, 1, C}}
+
+    create_entry(parent, name*"/encoded_data", data.encoded; kwargs...)
+    create_entry(parent, name*"/decoded_size", data.innersizes)
+        
+        # quick fix for avoiding hardcoding eltype while reading EncodedArray's
+    parent[name*"/sample_data"] = U(1.0)
+
+    codec_name = LegendDataTypes.array_codecs.by_type[C]
+    setattribute!(parent.data_store[name], :codec, String(codec_name))
+    write_to_properties!(setattribute!, parent.data_store[name], data.codec)
+    setdatatype!(parent.data_store[name], T)
+    nothing
+end
+
+# write VectorOfEncodedSimilarArrays
+function create_entry(parent::LHDataStore, name::AbstractString,
+    data::T; kwargs...) where {C, U, T <: VectorOfEncodedSimilarArrays{U, 1, C}}
+
+    create_entry(parent, name*"/encoded_data", data.encoded; kwargs...)
+    create_entry(parent, name*"/decoded_size", data.innersize; kwargs...)
+    parent[name*"/sample_data"] = U(1.0)
+    codec_name = LegendDataTypes.array_codecs.by_type[C] |> String
+    setattribute!(parent.data_store[name], :codec, codec_name)
+    write_to_properties!(setattribute!, parent.data_store[name], data.codec)
+    setdatatype!(parent.data_store[name], T)
     nothing
 end
 

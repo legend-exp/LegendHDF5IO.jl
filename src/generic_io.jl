@@ -381,7 +381,7 @@ function LegendDataTypes.readdata(
 end
 
 
-function _flatview_of_array_of_ntuple(A::AbstractArray{TPL,N}) where {L,T,N,TPL<:NTuple{L,T}}
+function _flatview_of_array_of_ntuple(A::AbstractArray{NTuple{L, T}, N}) where {L,T,N}
     reshape(reinterpret(T, A), L, size(A)...)
 end
 
