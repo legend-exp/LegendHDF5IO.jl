@@ -4,9 +4,11 @@ using TypedTables
 using ArraysOfArrays
 using RadiationDetectorSignals
 using StatsBase
+using EncodedArrays
 
 @testset "test wrapper" begin
     @testset "reading and writing" begin
+        codec = VarlenDiffArrayCodec()
         v = rand()
         w = v * u"W"
         z = rand(Bool)
@@ -15,6 +17,11 @@ using StatsBase
         data3 = (v=v, w=w, z=z, s=s, h=h)
         boolarray = rand(Bool, 50)
         x = rand(50)
+        x_enc = rand(-5:5, 50) |> codec
+        vofvec = VectorOfVectors([rand(-5:5, rand(1:100)) for _ in 1:50])
+        vofsimvec = VectorOfSimilarVectors([rand(-5:5, 100) for _ in 1:50])
+        vofsimvec_enc = broadcast(|>, vofsimvec, codec)
+        vofvec_enc = broadcast(|>, vofvec, codec)
         y = x*u"J"
         vofv1 = VectorOfVectors(fill(x, 50))
         vofv2 = VectorOfVectors(fill(y, 50))
@@ -23,8 +30,19 @@ using StatsBase
         trng = range(0.0u"μs", 10.0u"μs"; length=50)
         waveform = ArrayOfRDWaveforms((fill(trng, 50), aofa2))
         waveform2 = ArrayOfRDWaveforms((fill(trng, 50), vofv1))
-        tbl = Table((a=x, b=y, c=vofv1, d=vofv2, e=aofa1, f=waveform, 
-        g=waveform2, h=boolarray))
+        tbl = Table(
+            (
+                a=x, 
+                b=y, 
+                c=vofv1, 
+                d=vofv2, 
+                e=aofa1, 
+                f=waveform, 
+                g=waveform2, 
+                h=boolarray,
+                i=x_enc,
+                j=vofvec_enc,
+                k=vofsimvec_enc))
         nt = (data1=aofa2, data2=tbl, data3=data3)
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
