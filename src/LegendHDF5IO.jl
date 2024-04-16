@@ -5,6 +5,7 @@ module LegendHDF5IO
 using ArraysOfArrays
 using ElasticArrays
 using EncodedArrays
+using LegendDataManagement
 using LegendDataTypes
 using RadiationDetectorSignals
 using StaticArrays
@@ -20,7 +21,7 @@ using TypedTables: Table
 using LegendDataTypes: readdata, writedata, getunits, setunits!,
     units_from_string, units_to_string,
     read_from_properties, write_to_properties!
-
+using LegendDataManagement: DataSelector, _can_convert_to
 using RadiationDetectorSignals: RealQuantity, ArrayOfRDWaveforms
 
 

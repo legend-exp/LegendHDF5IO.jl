@@ -5,6 +5,7 @@ using ArraysOfArrays
 using RadiationDetectorSignals
 using StatsBase
 using EncodedArrays
+using LegendDataManagement
 
 @testset "test wrapper" begin
     @testset "reading and writing" begin
@@ -13,8 +14,10 @@ using EncodedArrays
         w = v * u"W"
         z = rand(Bool)
         s = "Test String"
+        fk = FileKey("l200-p03-r006-cal-20221226T200846Z")
+        filekey = fill(fk, 50)
         h = fit(Histogram, (rand(10), rand(10)), (0:0.2:1, Float64[0, 0.5, 1]))
-        data3 = (v=v, w=w, z=z, s=s, h=h)
+        data3 = (v=v, w=w, z=z, s=s, h=h, i=filekey, j=fk)
         boolarray = rand(Bool, 50)
         x = rand(50)
         x_enc = rand(-5:5, 50) |> codec

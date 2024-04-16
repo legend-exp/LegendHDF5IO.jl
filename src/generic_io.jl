@@ -12,13 +12,38 @@ const datatype_regexp = r"""^(([A-Za-z_]*)(<([0-9,]*)>)?)(\{(.*)\})?$"""
 const arraydims_regexp = r"""^<([0-9,]*)>$"""
 
 function _eldatatype_from_string(s::Union{Nothing,AbstractString})
-    if s == nothing || s == ""
+    if isnothing(s) || isempty(s)
         RealQuantity
     else
         datatype_from_string(s)
     end
 end
 
+dataselector_byname = Dict{String, DataType}(
+    "expsetup" => ExpSetup,
+    "datatier" => DataTier,
+    "datapartition" => DataPartition,
+    "dataperiod" => DataPeriod,
+    "datarun" => DataRun,
+    "datacategory" => DataCategory,
+    "timestamp" => Timestamp,
+    "filekey" => FileKey,
+    "channelid" => ChannelId,
+    "detectorid" => DetectorId
+)
+
+dataselector_bytypes = Dict{DataType, String}(
+    ExpSetup => "expsetup",
+    DataTier => "datatier",
+    DataPartition => "datapartition",
+    DataPeriod => "dataperiod",
+    DataRun => "datarun",
+    DataCategory => "datacategory",
+    Timestamp => "timestamp",
+    FileKey => "filekey",
+    ChannelId => "channelid",
+    DetectorId => "detectorid"
+)
 
 _ndims(x) = ndims(x)
 _ndims(::Type{<:AbstractArray{<:Any,N}}) where {N} = N
@@ -40,6 +65,8 @@ function datatype_from_string(s::AbstractString)
         Symbol
     elseif haskey(_datatype_dict, s)
         _datatype_dict[s]
+    elseif  haskey(dataselector_byname, s)
+        dataselector_byname[s]
     else
         m = match(datatype_regexp, s)
         m isa Nothing && throw(ErrorException("Invalid datatype string \"$s\""))
@@ -80,7 +107,7 @@ function datatype_from_string(s::AbstractString)
             elseif tp == "array"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
-                AbstractArray{<:T,N}
+                (T <: DataSelector) ? AbstractArray{T,N} : AbstractArray{<:T, N}
             elseif tp == "encoded_array"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
@@ -141,6 +168,9 @@ datatype_to_string(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K 
 
 datatype_to_string(::Type{<:Histogram{T, N}}) where {T, N} = 
     "histogram<$N>$(_inner_datatype_to_string(T))"
+
+datatype_to_string(::Type{<:T}) where {T <: DataSelector} = 
+    dataselector_bytypes[T]
 
 function _eltype(dset::HDF5.Dataset)
     dtype = HDF5.datatype(dset)

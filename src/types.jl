@@ -240,6 +240,20 @@ LH5Array(ds::HDF5.H5DataStore,
     VectorOfEncodedSimilarArrays{U}(C(), innersize, data)
 end
 
+LH5Array(ds::HDF5.Dataset, ::Type{<:T}
+    ) where {T <: DataSelector} = begin
+    
+    s = read(ds)
+    T(s)
+end
+
+function LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:T, N}}
+    ) where {T <: DataSelector, N}
+   
+    s = read(ds)
+    T.(s)
+end
+
 Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
     dtype = HDF5.datatype(lh.file)
@@ -383,7 +397,7 @@ Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.haskey(lh::LHDataStore, i::AbstractString) = haskey(lh.data_store, i)
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
-Base.getindex(lh::LHDataStore, i::Any) = getindex(lh, string(i))
+Base.getindex(lh::LHDataStore, i::Any...) = getindex(lh, join(string.(i), "/"))
 
 Base.length(lh::LHDataStore) = length(keys(lh))
 
@@ -418,7 +432,8 @@ function Base.setindex!(lh::LHDataStore, v, i::AbstractString)
     return v
 end
 
-Base.setindex!(lh::LHDataStore, v, i::Any) = setindex!(lh, v, string(i))
+Base.setindex!(lh::LHDataStore, v, i::Any...) = 
+    setindex!(lh, v, join(string.(i), "/"))
 
 
 
@@ -437,6 +452,33 @@ function create_entry(parent::LHDataStore, name::AbstractString, data::T;
 
     create_entry(parent, name, ustrip(data); kwargs...)
     setunits!(parent.data_store[name], unit(T))
+    nothing
+end
+
+# write DataSelector
+function create_entry(parent::LHDataStore, name::AbstractString, 
+    data::T; kwargs...) where {T <:DataSelector}
+    
+    create_entry(parent, name, string(data); kwargs...)
+    setdatatype!(parent.data_store[name], T)
+    nothing
+end
+
+# write AbstractArray{<:DataSelector}
+function create_entry(parent::LHDataStore, name::AbstractString, 
+    data::T; kwargs...) where {T <:AbstractArray{<:DataSelector}}
+    
+    create_entry(parent, name, string.(data); kwargs...)
+    setdatatype!(parent.data_store[name], T)
+    nothing
+end
+
+# write AbstractArray{<:String}
+function create_entry(parent::LHDataStore, name::AbstractString, 
+    data::AbstractArray{String, N}; kwargs...) where {N}
+
+    parent.data_store[name] = data
+    setdatatype!(parent.data_store[name], Array{String, N})
     nothing
 end
 
