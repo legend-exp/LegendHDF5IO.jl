@@ -218,7 +218,7 @@ LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedArrays{T, 1} where {T}}
     data_vec::VectorOfVectors{UInt8, Vector{UInt8}} = LH5Array(
         ds["encoded_data"])[:]
     size_vec::Vector{NTuple{1, Int64}} = LH5Array(ds["decoded_size"])
-    U = eltype(ds["sample_data"])
+    U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
     C = LegendDataTypes.array_codecs.by_name[codec_name]
     VectorOfEncodedArrays{U}(C(), size_vec, data_vec)
@@ -234,24 +234,10 @@ LH5Array(ds::HDF5.H5DataStore,
     data::VectorOfVectors{UInt8, Vector{UInt8}} = LH5Array(
         ds["encoded_data"])[:]
     innersize::NTuple{1, Int64} = LH5Array(ds["decoded_size"])
-    U = eltype(ds["sample_data"])
+    U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
     C = LegendDataTypes.array_codecs.by_name[codec_name]
     VectorOfEncodedSimilarArrays{U}(C(), innersize, data)
-end
-
-LH5Array(ds::HDF5.Dataset, ::Type{<:T}
-    ) where {T <: DataSelector} = begin
-    
-    s = read(ds)
-    T(s)
-end
-
-function LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:T, N}}
-    ) where {T <: DataSelector, N}
-   
-    s = read(ds)
-    T.(s)
 end
 
 Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
@@ -452,24 +438,6 @@ function create_entry(parent::LHDataStore, name::AbstractString, data::T;
 
     create_entry(parent, name, ustrip(data); kwargs...)
     setunits!(parent.data_store[name], unit(T))
-    nothing
-end
-
-# write DataSelector
-function create_entry(parent::LHDataStore, name::AbstractString, 
-    data::T; kwargs...) where {T <:DataSelector}
-    
-    create_entry(parent, name, string(data); kwargs...)
-    setdatatype!(parent.data_store[name], T)
-    nothing
-end
-
-# write AbstractArray{<:DataSelector}
-function create_entry(parent::LHDataStore, name::AbstractString, 
-    data::T; kwargs...) where {T <:AbstractArray{<:DataSelector}}
-    
-    create_entry(parent, name, string.(data); kwargs...)
-    setdatatype!(parent.data_store[name], T)
     nothing
 end
 
