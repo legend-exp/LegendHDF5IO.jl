@@ -12,13 +12,12 @@ const datatype_regexp = r"""^(([A-Za-z_]*)(<([0-9,]*)>)?)(\{(.*)\})?$"""
 const arraydims_regexp = r"""^<([0-9,]*)>$"""
 
 function _eldatatype_from_string(s::Union{Nothing,AbstractString})
-    if s == nothing || s == ""
+    if isnothing(s) || isempty(s)
         RealQuantity
     else
         datatype_from_string(s)
     end
 end
-
 
 _ndims(x) = ndims(x)
 _ndims(::Type{<:AbstractArray{<:Any,N}}) where {N} = N
@@ -80,7 +79,7 @@ function datatype_from_string(s::AbstractString)
             elseif tp == "array"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
-                AbstractArray{<:T,N}
+                _array_type(Array{T, N})
             elseif tp == "encoded_array"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
@@ -96,6 +95,9 @@ function datatype_from_string(s::AbstractString)
     end
 end
 
+function _array_type(::Type{Array{T, N}}) where {T, N} 
+    AbstractArray{<:T, N}
+end
 
 function _inner_datatype_to_string(::Type{T}) where T
     s = datatype_to_string(T)
@@ -381,7 +383,7 @@ function LegendDataTypes.readdata(
 end
 
 
-function _flatview_of_array_of_ntuple(A::AbstractArray{TPL,N}) where {L,T,N,TPL<:NTuple{L,T}}
+function _flatview_of_array_of_ntuple(A::AbstractArray{NTuple{L, T}, N}) where {L,T,N}
     reshape(reinterpret(T, A), L, size(A)...)
 end
 

@@ -16,11 +16,18 @@ Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
 TypedTables = "9d95f2ec-7b3d-5a63-8d20-e2491e220bb9"
 Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
+[weakdeps]
+LegendDataManagement = "9feedd95-f0e0-423f-a8dc-de0970eae6b3"
+
+[extensions]
+LegendHDF5IOLegendDataManagementExt = "LegendDataManagement"
+
 [compat]
 ArraysOfArrays = "0.5, 0.6"
 ElasticArrays = "1"
 EncodedArrays = "0.4"
 HDF5 = "0.15, 0.16, 0.17"
+LegendDataManagement = "0.2.8"
 LegendDataTypes = "0.1"
 RadiationDetectorSignals = "0.3"
 StaticArrays = "0.12, 1.0"
@@ -30,3 +37,6 @@ Tables = "0.2, 1.0"
 TypedTables = "1.2"
 Unitful = "1"
 julia = "1.6"
+
+[extras]
+LegendDataManagement = "9feedd95-f0e0-423f-a8dc-de0970eae6b3"
