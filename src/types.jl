@@ -221,7 +221,8 @@ LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedArrays{T, 1} where {T}}
     U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
     C = LegendDataTypes.array_codecs.by_name[codec_name]
-    VectorOfEncodedArrays{U}(C(), size_vec, data_vec)
+    codec = read_from_properties(getattribute, ds, C)
+    VectorOfEncodedArrays{U}(codec, size_vec, data_vec)
 end
 """
     LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedSimilarArrays{T, 1} where {T}})
@@ -233,11 +234,12 @@ LH5Array(ds::HDF5.H5DataStore,
 
     data::VectorOfVectors{UInt8, Vector{UInt8}} = LH5Array(
         ds["encoded_data"])[:]
-    innersize::NTuple{1, Int64} = LH5Array(ds["decoded_size"])
+    innersize::NTuple{1, Int64} = (LH5Array(ds["decoded_size"]),)
     U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
     C = LegendDataTypes.array_codecs.by_name[codec_name]
-    VectorOfEncodedSimilarArrays{U}(C(), innersize, data)
+    codec = read_from_properties(getattribute, ds, C)
+    VectorOfEncodedSimilarArrays{U}(codec, innersize, data)
 end
 
 Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
@@ -617,7 +619,7 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     data::T; kwargs...) where {C, U, T <: VectorOfEncodedSimilarArrays{U, 1, C}}
 
     create_entry(parent, name*"/encoded_data", data.encoded; kwargs...)
-    create_entry(parent, name*"/decoded_size", data.innersize; kwargs...)
+    create_entry(parent, name*"/decoded_size", only(data.innersize); kwargs...)
     parent[name*"/sample_data"] = U(1.0)
     codec_name = LegendDataTypes.array_codecs.by_type[C] |> String
     setattribute!(parent.data_store[name], :codec, codec_name)
