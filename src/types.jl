@@ -417,7 +417,7 @@ Base.show(io::IO, lh::LHDataStore) = show(io, MIME"text/plain"(), lh)
 
 function Base.setindex!(lh::LHDataStore, v, i::AbstractString)
     create_entry(lh, i, v, usechunks=lh.usechunks)
-    return v
+    nothing
 end
 
 Base.setindex!(lh::LHDataStore, v, i::Any...) = 
@@ -686,6 +686,7 @@ function add_entries!(lhd::LHDataStore, i::AbstractString,
     HDF5.rename_attribute(lhd.data_store[i], "datatype", "datatype_old")
     HDF5.delete_attribute(lhd.data_store[i], "datatype_old")
     setdatatype!(lhd.data_store[i], typeof(tbl))
+    nothing
 end
 
 """
@@ -704,6 +705,7 @@ function add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
     HDF5.rename_attribute(lhd.data_store[i], "datatype", "datatype_old")
     HDF5.delete_attribute(lhd.data_store[i], "datatype_old")
     setdatatype!(lhd.data_store[i], typeof(new_nt))
+    nothing
 end
 export add_entries!
 
@@ -736,6 +738,7 @@ function _delete_entry(lhd::LHDataStore, nt::NamedTuple,
         setdatatype!(lhd.data_store[parent], typeof(new_nt))
     end
     HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
+    nothing
 end
 
 function _delete_entry(lhd::LHDataStore, tbl::Table, parent::AbstractString, 
@@ -747,4 +750,5 @@ function _delete_entry(lhd::LHDataStore, tbl::Table, parent::AbstractString,
     HDF5.rename_attribute(lhd.data_store[parent], "datatype", "datatype_old")
     HDF5.delete_attribute(lhd.data_store[parent], "datatype_old")
     setdatatype!(lhd.data_store[parent], typeof(new_tbl))
+    nothing
 end
