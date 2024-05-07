@@ -45,35 +45,31 @@ LegendHDF5IO.LH5Array(ds::LegendHDF5IO.HDF5.Dataset, ::Type{<:T}
     T(s)
 end
 
-function LegendHDF5IO.LH5Array(ds::LegendHDF5IO.HDF5.Dataset, ::Type{<:AbstractArray{<:T, N}}
-    ) where {T <: DataSelector, N}
+function LegendHDF5IO.LH5Array(ds::LegendHDF5IO.HDF5.Dataset, 
+    ::Type{<:AbstractArray{<:T, N}}) where {T <: DataSelector, N}
    
     s = read(ds)
     T.(s)
 end
 
 function __init__()
-    LegendHDF5IO._datatype_dict["expsetup"] = ExpSetup
-    LegendHDF5IO._datatype_dict["datatier"] = DataTier
-    LegendHDF5IO._datatype_dict["datapartition"] = DataPartition
-    LegendHDF5IO._datatype_dict["dataperiod"] = DataPeriod
-    LegendHDF5IO._datatype_dict["datarun"] = DataRun
-    LegendHDF5IO._datatype_dict["datacategory"] = DataCategory
-    LegendHDF5IO._datatype_dict["timestamp"] = Timestamp
-    LegendHDF5IO._datatype_dict["filekey"] = FileKey
-    LegendHDF5IO._datatype_dict["channelid"] = ChannelId
-    LegendHDF5IO._datatype_dict["detectorid"] = DetectorId
+    function extend_datatype_dict(::Type{T}, key::String
+        ) where {T <: DataSelector}
 
-    dataselector_bytypes[ExpSetup] = "expsetup"
-    dataselector_bytypes[DataTier] = "datatier"
-    dataselector_bytypes[DataPartition] = "datapartition"
-    dataselector_bytypes[DataPeriod] = "dataperiod"
-    dataselector_bytypes[DataRun] = "datarun"
-    dataselector_bytypes[DataCategory] = "datacategory"
-    dataselector_bytypes[Timestamp] = "timestamp"
-    dataselector_bytypes[FileKey] = "filekey"
-    dataselector_bytypes[ChannelId] = "channelid"
-    dataselector_bytypes[DetectorId] = "detectorid"
+        LegendHDF5IO._datatype_dict[key] = T
+        dataselector_bytypes[T] = key
+    end
+
+    (@isdefined ExpSetup) && extend_datatype_dict(ExpSetup, "expsetup")
+    (@isdefined DataTier) && extend_datatype_dict(DataTier, "datatier")
+    (@isdefined DataRun) && extend_datatype_dict(DataRun, "datarun")
+    (@isdefined DataPeriod) && extend_datatype_dict(DataPeriod, "dataperiod")
+    (@isdefined DataCategory) && extend_datatype_dict(DataCategory, "datacategory")
+    (@isdefined Timestamp) && extend_datatype_dict(Timestamp, "timestamp")
+    (@isdefined FileKey) && extend_datatype_dict(FileKey, "filekey")
+    (@isdefined ChannelId) && extend_datatype_dict(ChannelId, "channelid")
+    (@isdefined DetectorId) && extend_datatype_dict(DetectorId, "detectorid")
+    (@isdefined DataPartition) && extend_datatype_dict(DataPartition, "datapartition")
 end
 
 end
