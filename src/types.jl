@@ -215,8 +215,8 @@ return a VectorOfEncodedArrays
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedArrays{T, 1} where {T}}
     ) = begin
     
-    data_vec::VectorOfVectors{UInt8, Vector{UInt8}} = LH5Array(
-        ds["encoded_data"])[:]
+    data_vec = LH5Array(
+        ds["encoded_data"])
     size_vec::Vector{NTuple{1, Int64}} = LH5Array(ds["decoded_size"])
     U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
@@ -232,8 +232,8 @@ return a VectorOfEncodedSimilarArrays
 LH5Array(ds::HDF5.H5DataStore, 
     ::Type{<:VectorOfEncodedSimilarArrays{T, 1} where {T}}) = begin
 
-    data::VectorOfVectors{UInt8, Vector{UInt8}} = LH5Array(
-        ds["encoded_data"])[:]
+    data = LH5Array(
+        ds["encoded_data"])
     innersize::NTuple{1, Int64} = (LH5Array(ds["decoded_size"]),)
     U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
@@ -262,9 +262,6 @@ Base.getindex(lh::LH5AoSA{T, M}, idxs::LHIndexType...) where {T, M} = begin
     indices = (ArraysOfArrays._ncolons(Val{M}())..., idxs...)
     ArrayOfSimilarArrays{T, M}(lh.data[indices...])
 end
-
-Base.getindex(lh::LH5ArrayOfRDWaveforms, idxs::LHIndexType...) = 
-    ArrayOfRDWaveforms((lh.time[idxs...], lh.signal[idxs...]))
 
 _inv_element_ptrs(el_ptr::AbstractVector{<:Int}) = UInt32.(el_ptr .- 1)[2:end]
 

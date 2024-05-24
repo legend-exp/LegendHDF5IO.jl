@@ -83,7 +83,7 @@ using LegendDataManagement
                     vofvec = VectorOfVectors(data)
                     vofvec_enc = broadcast(|>, vofvec, codec)
                     @test setindex!(lhd, vofvec_enc, "vofvec_enc") |> isnothing
-                    @test lhd["vofvec_enc"] == vofvec_enc
+                    @test lhd["vofvec_enc"][:] == vofvec_enc
                 end
                 @testset "IO of VectorOfEncodedSimilarArrays" begin
                     codec = VarlenDiffArrayCodec()
@@ -91,7 +91,7 @@ using LegendDataManagement
                     vofsimvec = VectorOfSimilarVectors(data)
                     vofsimvec_enc = broadcast(|>, vofsimvec, codec)
                     @test setindex!(lhd, vofsimvec_enc, "vofsimvec_enc") |> isnothing
-                    @test lhd["vofsimvec_enc"] == vofsimvec_enc
+                    @test lhd["vofsimvec_enc"][:] == vofsimvec_enc
                 end
                 @testset "IO of ArrayOfRDWaveforms" begin
                     data = nestedview(rand(UInt16, 50, 50)*u"m")
