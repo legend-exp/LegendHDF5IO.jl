@@ -5,7 +5,6 @@ using ArraysOfArrays
 using RadiationDetectorSignals
 using StatsBase
 using EncodedArrays
-using LegendDataManagement
 
 @testset verbose=true "test wrapper" begin
     @testset verbose=true "reading and writing" begin
@@ -104,19 +103,6 @@ using LegendDataManagement
                     tbl = Table(a=rand(10), b=rand(10))
                     @test setindex!(lhd, tbl, "tbl") |> isnothing
                     @test lhd["tbl"][:] == tbl
-                end
-                if @isdefined FileKey
-                    @testset "IO of FileKey" begin
-                        fk = FileKey("l200-p03-r006-cal-20221226T200846Z")
-                        @test setindex!(lhd, fk, "fk") |> isnothing
-                        @test lhd["fk"] == fk
-                    end
-                    @testset "IO of Array{FileKey}" begin
-                        fk = FileKey("l200-p03-r006-cal-20221226T200846Z")
-                        filekey = fill(fk, 50)
-                        @test setindex!(lhd, filekey, "filekey") |> isnothing
-                        @test lhd["filekey"] == filekey
-                    end
                 end
             end
         end

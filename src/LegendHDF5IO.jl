@@ -31,20 +31,10 @@ include("types.jl")
 
 const _datatype_dict = Dict{String,Type}()
 
-@static if !isdefined(Base, :get_extension)
-    using Requires
-end
-
 function __init__()
     _datatype_dict[datatype_to_string(EventType)] = EventType
     _datatype_dict["table{t0,dt,values}"] = Vector{<:RDWaveform}
     _datatype_dict["struct{binning,weights,isdensity}"] = Histogram
-
-    @static if !isdefined(Base, :get_extension)
-        @require LegendDataManagement = "9feedd95-f0e0-423f-a8dc-de0970eae6b3" begin
-            include("../ext/LegendHDF5IOLegendDataManagementExt.jl")
-        end        
-    end
 end
 
 end # module
