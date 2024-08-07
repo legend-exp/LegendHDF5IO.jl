@@ -1,5 +1,7 @@
 [deps]
+Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 ArraysOfArrays = "65a8f2f4-9b39-5baf-92e2-a9cc46fdf018"
+Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 EncodedArrays = "97725368-735e-11e9-0dd7-6bf34c3b13a8"
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
 LegendDataManagement = "9feedd95-f0e0-423f-a8dc-de0970eae6b3"
