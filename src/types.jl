@@ -217,7 +217,7 @@ LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedArrays{T, 1} where {T}}
     
     data_vec = LH5Array(
         ds["encoded_data"])
-    size_vec::Vector{NTuple{1, Int64}} = LH5Array(ds["decoded_size"])
+    size_vec::Vector{NTuple{1, Int}} = LH5Array(ds["decoded_size"])
     U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
     C = LegendDataTypes.array_codecs.by_name[codec_name]
@@ -234,7 +234,7 @@ LH5Array(ds::HDF5.H5DataStore,
 
     data = LH5Array(
         ds["encoded_data"])
-    innersize::NTuple{1, Int64} = (LH5Array(ds["decoded_size"]),)
+    innersize::NTuple{1, Int} = (LH5Array(ds["decoded_size"]),)
     U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
     C = LegendDataTypes.array_codecs.by_name[codec_name]
