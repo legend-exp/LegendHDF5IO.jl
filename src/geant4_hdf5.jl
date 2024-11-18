@@ -1,4 +1,4 @@
-# This file is a part of LegendDataTypes.jl, licensed under the MIT License (MIT).
+# This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
 export Geant4HDF5Input
 struct Geant4HDF5Input <: AbstractLegendInput

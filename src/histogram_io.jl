@@ -1,3 +1,5 @@
+# This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
+
 _range_to_nt(r::AbstractRange) = (
     first = first(r),
     last = last(r),
