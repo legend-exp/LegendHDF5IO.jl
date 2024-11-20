@@ -633,7 +633,7 @@ function create_entry(parent::LHDataStore, name::AbstractString, data;
 
     Tables.istable(data) || throw(ArgumentError("Value to write, of type "
     *"$(typeof(data)), is not a table"))
-    create_entry(parent, name, Tables.columns(data); kwargs...)
+    create_entry(parent, name, Tables.columns(Table(data)); kwargs...)
     setdatatype!(parent.data_store[name], typeof(data))
     nothing
 end
