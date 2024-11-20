@@ -422,6 +422,8 @@ end
 Base.setindex!(lh::LHDataStore, v, i::Any...) = 
     setindex!(lh, v, join(string.(i), "/"))
 
+LegendDataTypes.readdata(input::LHDataStore, args...; kwargs...) = readdata(input.data_store, args...; kwargs...)
+LegendDataTypes.writedata(output::LHDataStore, args...; kwargs...) = writedata(output.data_store, args...; kwargs...)    
 
 
 # write <:Real
