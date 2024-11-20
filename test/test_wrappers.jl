@@ -1,10 +1,15 @@
+# This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
+
+using Test
 using LegendHDF5IO
-using Unitful
-using TypedTables
+
 using ArraysOfArrays
+using EncodedArrays
+using Measurements
 using RadiationDetectorSignals
 using StatsBase
-using EncodedArrays
+using TypedTables
+using Unitful
 
 @testset verbose=true "test wrapper" begin
     @testset verbose=true "reading and writing" begin
@@ -103,6 +108,20 @@ using EncodedArrays
                     tbl = Table(a=rand(10), b=rand(10))
                     @test setindex!(lhd, tbl, "tbl") |> isnothing
                     @test lhd["tbl"][:] == tbl
+                end
+                @testset "IO of Measurements" begin
+                    m = 2.0 ± 0.1
+                    @test setindex!(lhd, m, "m") |> isnothing
+                    @test lhd["m"] == m
+                    mu = (2.0 ± 0.1)u"s"
+                    @test setindex!(lhd, mu, "m_unit") |> isnothing
+                    @test lhd["m_unit"] == mu
+                    mv = measurement.(rand(10), rand(10))
+                    @test setindex!(lhd, mv, "mv") |> isnothing
+                    @test lhd["mv"] == mv
+                    mvu = mv .* u"s"
+                    @test setindex!(lhd, mvu, "mv_unit") |> isnothing
+                    @test lhd["mv_unit"] == mvu
                 end
             end
         end
