@@ -642,9 +642,8 @@ end
 
 function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:NamedTuple}
-)
-    syms = AT.body.parameters[1]
+    AT::Type{<:NamedTuple{syms}}
+) where {syms}
     NamedTuple{syms}(map(k -> readdata(input, "$name/$k"), syms))
 end
 
@@ -655,8 +654,8 @@ function LegendDataTypes.writedata(
     fulldatatype::DataType = typeof(x)
 )
     # @debug("writedata(\"$(HDF5.name(output))\", \"$name\", $fulldatatype")
-    Tables.istable(x) || throw(ArgumentError("Value to write, of type $(typeof(x)),is not a table"))
-    cols = Tables.columns(x)
+    Tables.istable(x) || throw(ArgumentError("Value to write, of type $(typeof(x)), is not a table"))
+    cols = Tables.columns(Table(x))
     writedata(output, name, cols, fulldatatype)
 end
 
