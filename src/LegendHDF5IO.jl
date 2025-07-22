@@ -22,6 +22,8 @@ using LegendDataTypes: readdata, writedata, getunits, setunits!,
     read_from_properties, write_to_properties!
 using RadiationDetectorSignals: RealQuantity, ArrayOfRDWaveforms
 
+import H5Zzstd
+
 
 include("generic_io.jl")
 include("radsig_io.jl")
