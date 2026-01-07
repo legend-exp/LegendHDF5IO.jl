@@ -31,7 +31,6 @@ _dtt02range(dt::Array, t0::Array, values::VectorOfEncodedArrays) =
 _dtt02range(dt, t0, values) = _dtt02range.(dt, t0, size(values, 1))
 
 function from_table(tbl, ::Type{<:AbstractVector{<:RDWaveform}})
-    global g_state = tbl
     StructArray{RDWaveform}((
         _dtt02range(tbl.dt, tbl.t0, tbl.values),
         tbl.values
@@ -53,6 +52,10 @@ function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
     AT::Type{<:AbstractVector{<:RDWaveform}}
 )
-    tbl = readdata(input, name, TypedTables.Table)
+    grp = input[name]
+    cols = Tuple(Symbol.(HDF5.keys(grp)))
+    Set(cols) == Set((:dt, :t0, :values)) ||
+        throw(ArgumentError("Expected waveform table with columns :dt, :t0, :values, got: $cols"))
+    tbl = readdata(input, name, TypedTables.Table{<:NamedTuple{cols}})
     from_table(tbl, AbstractVector{<:RDWaveform})
 end

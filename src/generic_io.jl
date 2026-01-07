@@ -7,6 +7,10 @@
 
 const default_compression = ("shuffle", (), "deflate", 3)
 
+# Field-set based table type detection (order-independent)
+const _table_fieldset_dict = Dict{Set{String}, Type}(
+    Set(["dt", "t0", "values"]) => Vector{<:RDWaveform}
+)
 
 const datatype_regexp = r"""^(([A-Za-z_]*)(<([0-9,]*)>)?)(\{(.*)\})?$"""
 const arraydims_regexp = r"""^<([0-9,]*)>$"""
@@ -40,6 +44,10 @@ function datatype_from_string(s::AbstractString)
     elseif haskey(_datatype_dict, s)
         _datatype_dict[s]
     else
+        if startswith(s, "table{") && endswith(s, "}")
+            fields = Set(split(s[7:end-1], ","))
+            haskey(_table_fieldset_dict, fields) && return _table_fieldset_dict[fields]
+        end
         m = match(datatype_regexp, s)
         m isa Nothing && throw(ErrorException("Invalid datatype string \"$s\""))
         tp = m[2]
