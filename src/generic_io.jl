@@ -19,6 +19,20 @@ function _eldatatype_from_string(s::Union{Nothing,AbstractString})
     end
 end
 
+function _sort_datatype_fields(s::AbstractString)
+    m = match(datatype_regexp, s)
+    m isa Nothing && throw(ArgumentError("Invalid datatype string \"$s\""))
+    kind = m[1] 
+    field_string = m[6]
+    if kind != "struct" && kind != "table"
+        return s
+    else 
+        fields = split(field_string, ",")
+        sorted_fields = sort(fields)
+        return "$kind{"*join(sorted_fields, ",")*"}"
+    end
+end
+
 _ndims(x) = ndims(x)
 _ndims(::Type{<:AbstractArray{<:Any,N}}) where {N} = N
 
@@ -29,6 +43,7 @@ _namedtuple_type(members::AbstractVector{<:AbstractString}) = NamedTuple{(Symbol
 
 
 function datatype_from_string(s::AbstractString)
+    s_sorted_fields = _sort_datatype_fields(s)
     if s == "real"
         RealQuantity
     elseif s == "bool"
@@ -37,8 +52,8 @@ function datatype_from_string(s::AbstractString)
         String
     elseif s == "symbol"
         Symbol
-    elseif haskey(_datatype_dict, s)
-        _datatype_dict[s]
+    elseif haskey(_datatype_dict, s_sorted_fields)
+        _datatype_dict[s_sorted_fields]
     else
         m = match(datatype_regexp, s)
         m isa Nothing && throw(ErrorException("Invalid datatype string \"$s\""))
