@@ -22,7 +22,7 @@ end
 function _sort_datatype_fields(s::AbstractString)
     m = match(datatype_regexp, s)
     m isa Nothing && throw(ArgumentError("Invalid datatype string \"$s\""))
-    kind = m[1] 
+    kind = m[1]
     field_string = m[6]
     if kind != "struct" && kind != "table"
         return s
