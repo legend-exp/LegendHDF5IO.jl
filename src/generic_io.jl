@@ -26,7 +26,7 @@ function _sort_datatype_fields(s::AbstractString)
     field_string = m[6]
     if kind != "struct" && kind != "table"
         return s
-    else 
+    else
         fields = split(field_string, ",")
         sorted_fields = sort(fields)
         return "$kind{"*join(sorted_fields, ",")*"}"
