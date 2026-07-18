@@ -103,6 +103,7 @@ using Unitful
                     waveform = ArrayOfRDWaveforms((fill(trng, 50), data))
                     @test setindex!(lhd, waveform, "waveform") |> isnothing
                     @test lhd["waveform"][:] == waveform
+                    @test !isdefined(LegendHDF5IO, :g_state)
                 end
                 @testset "IO of Table" begin
                     tbl = Table(a=rand(10), b=rand(10))
@@ -188,7 +189,12 @@ using Unitful
                     @testset "add entry" begin
                         @test add_entries!(lhd, "nt", (y=y,)) |> isnothing
                         @test lhd["nt"] == nt
-                    end    
+                    end
+                end
+                @testset verbose=true "error paths" begin
+                    delete_entry!(lhd, "nt/y")
+                    @test_throws ArgumentError delete_entry!(lhd, "nt/x")
+                    @test_throws DimensionMismatch add_entries!(lhd, "tbl", Table(z=rand(3)))
                 end
             end
         end
