@@ -31,12 +31,15 @@ _nt_to_edge(nt::NamedTuple) = _nt_to_range(nt)
 _nt_to_edge(nt::AbstractVector) = nt
 
 function _nt_to_histogram(nt::NamedTuple)
+    closedleft = nt.binning[1].closedleft
+    all(b -> b.closedleft == closedleft, values(nt.binning)) || throw(ArgumentError(
+        "Histogram axes with mixed bin closedness are not supported"))
     return StatsBase.Histogram(
-        tuple(map(b ->_nt_to_edge(b.binedges), nt.binning)...), 
-        nt.weights, 
-        nt.binning[1].closedleft ? :left : :right, 
+        tuple(map(b ->_nt_to_edge(b.binedges), nt.binning)...),
+        nt.weights,
+        closedleft ? :left : :right,
         nt.isdensity
-    )  
+    )
 end
     
 function _histogram_to_nt(h::StatsBase.Histogram)
