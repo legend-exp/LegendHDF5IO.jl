@@ -177,6 +177,17 @@ return a `Symbol`.
 """
 LH5Array(ds::HDF5.Dataset, ::Type{<:Symbol}) = Symbol(read(ds))
 """
+    LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:StaticVector}})
+
+return an in-memory array of `SVector`s.
+"""
+LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:StaticVector}}) = begin
+    data = getcontent(ds)
+    u = getunits(ds)
+    L = size(data, 1)
+    nestedview(u == NoUnits ? data : data * u, SVector{L})
+end
+"""
     LH5Array(ds::HDF5.Dataset, ::Type{<:Tuple})
 
 return an `Tuple`
@@ -452,11 +463,28 @@ function create_entry(parent::LHDataStore, name::AbstractString, data::T;
 end
 
 # write <:Quantity
-function create_entry(parent::LHDataStore, name::AbstractString, data::T; 
+function create_entry(parent::LHDataStore, name::AbstractString, data::T;
     kwargs...) where {T<:Quantity}
 
     create_entry(parent, name, ustrip(data); kwargs...)
     setunits!(parent.data_store[name], unit(T))
+    nothing
+end
+
+# Store Bool values as UInt8 for h5py compatibility, like writedata does
+function create_entry(parent::LHDataStore, name::AbstractString, data::Bool;
+    kwargs...)
+
+    parent.data_store[name] = UInt8(data)
+    setdatatype!(parent.data_store[name], Bool)
+    nothing
+end
+
+function create_entry(parent::LHDataStore, name::AbstractString,
+    data::AbstractArray{Bool}; kwargs...)
+
+    create_entry(parent, name, UInt8.(data); kwargs...)
+    setdatatype!(parent.data_store[name], typeof(data))
     nothing
 end
 
@@ -500,18 +528,28 @@ function create_entry(parent::LHDataStore, name::AbstractString,
 end
 
 # write AbstractArray{<:Quantity}
-function create_entry(parent::LHDataStore, name::AbstractString, 
+function create_entry(parent::LHDataStore, name::AbstractString,
     data::AbstractArray{T}; kwargs...) where {T<:Quantity}
 
-    create_entry(parent, name, ustrip(data); kwargs...)
+    create_entry(parent, name, _ustrip(data); kwargs...)
     setdatatype!(parent.data_store[name], typeof(data))
     setunits!(parent.data_store[name], unit(T))
     nothing
 end
 
 # write ArrayOfSimilarArrays{<:RealQuantity}
-function create_entry(parent::LHDataStore, name::AbstractString, 
+function create_entry(parent::LHDataStore, name::AbstractString,
     data::ArrayOfSimilarArrays{T}; kwargs...) where {T<:RealQuantity}
+
+    create_entry(parent, name, flatview(data); kwargs...)
+    setdatatype!(parent.data_store[name], typeof(data))
+    nothing
+end
+
+# write AbstractArray{<:StaticVector{L, <:RealQuantity}}
+function create_entry(parent::LHDataStore, name::AbstractString,
+    data::AbstractArray{<:StaticVector{L, T}}; kwargs...
+    ) where {L, T<:RealQuantity}
 
     create_entry(parent, name, flatview(data); kwargs...)
     setdatatype!(parent.data_store[name], typeof(data))
@@ -542,14 +580,19 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     create_entry(parent, name, to_table(data); kwargs...)
 end
 
-# write NamedTuple 
-function create_entry(parent::LHDataStore, name::AbstractString, 
+# write NamedTuple
+function create_entry(parent::LHDataStore, name::AbstractString,
     data::NamedTuple; kwargs...)
 
-    for k in keys(data)
-        create_entry(parent, "$name/$(String(k))", data[k]; kwargs...)
+    grp = HDF5.create_group(parent.data_store, name)
+    try
+        for k in keys(data)
+            create_entry(parent, "$name/$(String(k))", data[k]; kwargs...)
+        end
+        setdatatype!(grp, typeof(data))
+    finally
+        close(grp)
     end
-    setdatatype!(parent.data_store[name], typeof(data))
     nothing
 end
 
