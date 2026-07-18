@@ -48,10 +48,10 @@ end
 
 
 # write Measurement
-function LegendHDF5IO.create_entry(parent::LegendHDF5IO.LHDataStore, name::AbstractString, 
+function LegendHDF5IO.create_entry(parent::LegendHDF5IO.LHDataStore, name::AbstractString,
     data::Union{<:T, <:AbstractArray{<:T}}; kwargs...) where {T <: Union{<:Measurement, <:Quantity{<:Measurement}}}
     LegendHDF5IO.create_entry(parent, name, (val = Measurements.value.(data), err = Measurements.uncertainty.(data)); kwargs...)
-    LegendHDF5IO.setdatatype!(parent.data_store[name], Measurement)
+    LegendHDF5IO.setdatatype!(parent.data_store[name], typeof(data))
     nothing
 end
 
