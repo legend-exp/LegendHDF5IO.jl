@@ -306,7 +306,7 @@ Base.size(lh::LH5Array{T, N}) where {T, N} = begin
     end
 end
 
-Base.copyto!(dest::AbstractArray, src::LH5Array) = begin
+Base.copyto!(dest::Array, src::LH5Array) = begin
     indices = ArraysOfArrays._ncolons(Val{ndims(src)}())
     copyto!(dest, src.file, indices...)
 end
@@ -314,6 +314,9 @@ end
 @inline _ustrip(x::AbstractArray{T}) where T<:Real = x
 @inline _ustrip(x::AbstractArray{T}) where T<:Quantity = 
     reinterpret(Unitful.numtype(T), x) 
+
+Base.append!(dest::LH5Array{T, 1}, src::EncodedArray) where {T} =
+    append!(dest, collect(src))
 
 Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
     x = convert(Array{T, N}, src)
