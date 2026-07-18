@@ -265,8 +265,6 @@ Base.getindex(lh::LH5AoSA{T, M}, idxs::LHIndexType...) where {T, M} = begin
     ArrayOfSimilarArrays{T, M}(lh.data[indices...])
 end
 
-_inv_element_ptrs(el_ptr::AbstractVector{<:Int}) = UInt32.(el_ptr .- 1)[2:end]
-
 Base.size(lh::LH5Array{T, N}) where {T, N} = begin
     dspace = HDF5.dataspace(lh.file)
     try
@@ -288,7 +286,7 @@ end
     reinterpret(Unitful.numtype(T), x) 
 
 Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
-    x = convert(AbstractArray{T, N}, src)
+    x = convert(Array{T, N}, src)
     old_size = size(dest)
     new_size = (old_size[1:N-1]..., old_size[N] + size(src, N))
     from, to = old_size[N] + 1, new_size[N]
@@ -300,16 +298,19 @@ end
 
 Base.append!(dest::LH5VoV, src::VectorOfVectors) = begin
     if !isempty(src)
-        append!(dest.data, src.data)
+        src_flat = src.data[first(src.elem_ptr):(last(src.elem_ptr) - 1)]
+        old_len = last(dest.elem_ptr) - first(dest.elem_ptr)
+        append!(dest.data, src_flat)
         ArraysOfArrays.append_elemptr!(dest.elem_ptr, src.elem_ptr)
         append!(dest.kernel_size, src.kernel_size)
 
-        # prepare elem_ptr to append to "cumulative_length"
-        clen = _inv_element_ptrs(dest.elem_ptr)
+        new_clen = cumsum(diff(src.elem_ptr)) .+ old_len
         dset = parent(dest.data.file)["cumulative_length"]
-        tmp = LH5Array(dset)
-        from = length(tmp) + 1
-        append!(tmp, clen[from:end])
+        try
+            append!(LH5Array(dset), new_clen)
+        finally
+            close(dset)
+        end
     end
     dest
 end
@@ -318,13 +319,19 @@ Base.append!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
     # first append values to on-disk array
     StructArrays.foreachfield(append!, dest, src)
 
-    # and then append time information to on disk array 
+    # and then append time information to on disk array
     src_t0 = first.(src.time)
     src_dt = step.(src.time)
-    dset_t0 = parent(dest.signal.data.file)["t0"]
-    dset_dt = parent(dest.signal.data.file)["dt"]
-    append!(LH5Array(dset_t0), src_t0)
-    append!(LH5Array(dset_dt), src_dt)
+    grp = parent(dest.signal.data.file)
+    dset_t0 = grp["t0"]
+    dset_dt = grp["dt"]
+    try
+        append!(LH5Array(dset_t0), src_t0)
+        append!(LH5Array(dset_dt), src_dt)
+    finally
+        close(dset_t0)
+        close(dset_dt)
+    end
     dest
 end
 
@@ -454,19 +461,20 @@ function create_entry(parent::LHDataStore, name::AbstractString,
 end
 
 # write AbstractArray{<:Real}
-function create_entry(parent::LHDataStore, name::AbstractString, 
+function create_entry(parent::LHDataStore, name::AbstractString,
     data::AbstractArray{T}; usechunks::Bool=false) where {T<:Real}
 
     dtype = HDF5.datatype(T)
     ds = if !usechunks
         HDF5.create_dataset(parent.data_store, name, dtype, size(data))
     else
+        # The size of the first written array informs the chunk size:
         data_size = size(data)
         sz_inner, sz_outer = data_size[begin:end-1], data_size[end]
-        chunk_size = sz_outer
-        @assert chunk_size > 0 "chunk size has to be greater than zero"
+        sz_outer > 0 || throw(ArgumentError(
+            "Cannot infer a chunk size for \"$name\" from an empty array"))
         dspace = (data_size, (sz_inner..., -1))
-        chunk = (sz_inner..., chunk_size)
+        chunk = (sz_inner..., sz_outer)
         HDF5.create_dataset(parent.data_store, name, dtype, dspace; chunk=chunk)
     end
     try
