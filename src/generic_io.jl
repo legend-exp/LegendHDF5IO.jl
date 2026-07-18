@@ -36,6 +36,23 @@ end
 _ndims(x) = ndims(x)
 _ndims(::Type{<:AbstractArray{<:Any,N}}) where {N} = N
 
+# Extract type parameters via dispatch, returning nothing where the given
+# type does not determine them:
+
+_inner_ntuple_length(::Type{<:AbstractArray{<:NTuple{L,Any}}}) where {L} = L
+_inner_ntuple_length(::Type) = nothing
+
+_inner_staticvector_length(::Type{<:AbstractArray{<:StaticVector{L}}}) where {L} = L
+_inner_staticvector_length(::Type) = nothing
+
+_enum_eltype(::Type{<:AbstractArray{E}}) where {E<:Enum} =
+    @isdefined(E) ? E : throw(ArgumentError("Enum element type not determined by array type"))
+
+_encoded_ndims(::Type{<:VectorOfEncodedArrays{T,N} where T}) where {N} = N
+_encoded_ndims(::Type) = nothing
+
+_table_names(::Type{<:TypedTables.Table{<:NamedTuple{names}}}) where {names} = names
+
 Base.@propagate_inbounds _tuple_droplast(x::NTuple{N,Any}, ::Val{M}) where {N,M} =
     Base.ntuple(i -> x[i], Val{N-M}())
 
@@ -66,6 +83,8 @@ function datatype_from_string(s::AbstractString)
         elseif tp == "ntuple"
             T = _eldatatype_from_string(content)
             (NTuple{N,<:T} where N)
+        elseif tp == "enum"
+            throw(ErrorException("Enum datatype \"$s\" is not registered"))
         else
             dims = parse.(Int, split(m[4], ","))
             eltp = content
@@ -110,8 +129,8 @@ function datatype_from_string(s::AbstractString)
     end
 end
 
-function _array_type(::Type{Array{T, N}}) where {T, N} 
-    AbstractArray{<:T, N}
+function _array_type(::Type{Array{T, N}}) where {T, N}
+    isconcretetype(T) ? AbstractArray{T, N} : AbstractArray{<:T, N}
 end
 
 function _inner_datatype_to_string(::Type{T}) where T
@@ -124,13 +143,13 @@ datatype_to_string(::Type{<:RealQuantity}) = "real"
 
 datatype_to_string(::Type{Bool}) = "bool"
 
-datatype_to_string(T::Type{<:Enum{U}}) where {U} = "enum{"*join(broadcast(x -> "$(string(x))=$(U(x))", instances.(T)), ",")*"}"
+datatype_to_string(T::Type{<:Enum{U}}) where {U} = "enum{"*join(broadcast(x -> "$(string(x))=$(U(x))", instances(T)), ",")*"}"
 
 datatype_to_string(::Type{<:AbstractString}) = "string"
 
 datatype_to_string(::Type{<:Symbol}) = "symbol"
 
-datatype_to_string(::Type{NTuple{N,T}}) where {N,T} = "ntuple$(_inner_datatype_to_string(T))"
+datatype_to_string(T::Type{<:NTuple{N,Any}}) where {N} = "ntuple$(_inner_datatype_to_string(eltype(T)))"
 
 datatype_to_string(::Type{<:AbstractArray{T,N}}) where {T,N} =
     "array<$N>$(_inner_datatype_to_string(T))"
@@ -388,17 +407,33 @@ function LegendDataTypes.writedata(
     writedata(output, name, reinterpret(T, x), fulldatatype)
 end
 
+function LegendDataTypes.writedata(
+    output::HDF5.H5DataStore, name::AbstractString,
+    x::Enum{T},
+    fulldatatype::DataType = typeof(x)
+) where {T}
+    writedata(output, name, T(x), fulldatatype)
+end
+
+function LegendDataTypes.readdata(
+    input::HDF5.H5DataStore, name::AbstractString,
+    ET::Type{<:Enum}
+)
+    ET(readdata(input, name, RealQuantity))
+end
+
 function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
     AT::Type{<:AbstractArray{<:Enum,N}}
 ) where N
-    ET = AT.body.parameters[1].ub
+    ET = _enum_eltype(AT)
     data = readdata(input, name, AbstractArray{RealQuantity,N})
     ET.(data)
 end
 
 
-function _flatview_of_array_of_ntuple(A::AbstractArray{NTuple{L, T}, N}) where {L,T,N}
+function _flatview_of_array_of_ntuple(A::AbstractArray{<:NTuple{L,Any}, N}) where {L,N}
+    T = eltype(eltype(A))
     reshape(reinterpret(T, A), L, size(A)...)
 end
 
@@ -411,12 +446,29 @@ function _flatview_to_array_of_ntuple(A::AbstractArray{T,N}, TPL::Type{NTuple{L,
     convert(Array{NTuple{L,T},N_out}, tmp)
 end
 
-_array_of_ntuple_innersize(A::AbstractArray{NTuple{L,T}}) where {L,T} = L
+_array_of_ntuple_innersize(A::AbstractArray{<:NTuple{L,Any}}) where {L} = L
 
-function _array_of_ntuple_innerconv(::Type{T}, A::AbstractArray{NTuple{L,U},N}) where {T,N,L,U}
+function _array_of_ntuple_innerconv(::Type{T}, A::AbstractArray{<:NTuple{L,Any},N}) where {T,N,L}
     convert(Array{NTuple{L,T},N}, A)
 end
 
+
+function LegendDataTypes.writedata(
+    output::HDF5.H5DataStore, name::AbstractString,
+    x::NTuple{L,Any},
+    fulldatatype::DataType = typeof(x)
+) where {L}
+    U = eltype(typeof(x))
+    isconcretetype(U) || throw(ArgumentError("Only homogeneous tuples are supported"))
+    writedata(output, name, collect(U, x), fulldatatype)
+end
+
+function LegendDataTypes.readdata(
+    input::HDF5.H5DataStore, name::AbstractString,
+    ::Type{<:Tuple}
+)
+    (readdata(input, name, AbstractArray{<:RealQuantity,1})...,)
+end
 
 function LegendDataTypes.writedata(
     output::HDF5.H5DataStore, name::AbstractString,
@@ -432,12 +484,9 @@ function LegendDataTypes.readdata(
 )
     N = length(size(input[name]))
     data = readdata(input, name, AbstractArray{RealQuantity,N})
-    SV = AT.var.ub
     L = size(data, 1)
-    if SV isa DataType
-        L_expected = SV.parameters[1].parameters[1][1]
-        L_expected == L || throw(ErrorException("Trying to read array of NTuples of length $L_expected, but inner dimension of data has length $L"))
-    end
+    L_expected = _inner_ntuple_length(AT)
+    isnothing(L_expected) || L_expected == L || throw(ErrorException("Trying to read array of NTuples of length $L_expected, but inner dimension of data has length $L"))
     _flatview_to_array_of_ntuple(data, NTuple{L,eltype(data)})
 end
 
@@ -456,12 +505,9 @@ function LegendDataTypes.readdata(
 )
     N = length(size(input[name]))
     data = readdata(input, name, AbstractArray{RealQuantity,N})
-    SV = AT.var.ub
     L = size(data, 1)
-    if SV isa DataType
-        L_expected = SV.parameters[1].parameters[1][1]
-        L_expected == L || throw(ErrorException("Trying to read array of static vectors of length $L_expected, but inner dimension of data has length $L"))
-    end
+    L_expected = _inner_staticvector_length(AT)
+    isnothing(L_expected) || L_expected == L || throw(ErrorException("Trying to read array of static vectors of length $L_expected, but inner dimension of data has length $L"))
     nestedview(data, SVector{L})
 end
 
@@ -472,6 +518,18 @@ function LegendDataTypes.writedata(
     fulldatatype::DataType = typeof(x)
 )
     output[name] = x
+    if fulldatatype != Nothing
+        setdatatype!(output[name], fulldatatype)
+    end
+    nothing
+end
+
+function LegendDataTypes.writedata(
+    output::HDF5.H5DataStore, name::AbstractString,
+    x::AbstractArray{<:AbstractString},
+    fulldatatype::DataType = typeof(x)
+)
+    output[name] = convert(Array{String}, x)
     if fulldatatype != Nothing
         setdatatype!(output[name], fulldatatype)
     end
@@ -530,6 +588,42 @@ end
 
 function LegendDataTypes.writedata(
     output::HDF5.H5DataStore, name::AbstractString,
+    x::EncodedArray{T,1,C},
+    fulldatatype::DataType = typeof(x)
+) where {T,C}
+    writedata(output, "$name/encoded_data", x.encoded)
+    writedata(output, "$name/size", x.size)
+    writedata(output, "$name/sample_data", zero(T))
+
+    dset = output[name]
+    codec_name = LegendDataTypes.array_codecs[C]
+    setattribute!(dset, :codec, String(codec_name))
+    write_to_properties!(setattribute!, dset, x.codec)
+
+    setdatatype!(dset, fulldatatype)
+    nothing
+end
+
+function LegendDataTypes.readdata(
+    input::HDF5.H5DataStore, name::AbstractString,
+    AT::Type{<:EncodedArray}
+)
+    data = readdata(input, "$name/encoded_data")
+    sz = readdata(input, "$name/size")
+    innersize = sz isa Tuple ? Int.(sz) : (Int(sz),)
+
+    dset = input[name]
+    codec_name = Symbol(getattribute(dset, :codec, String))
+    C = LegendDataTypes.array_codecs[codec_name]
+    codec = read_from_properties(getattribute, dset, C)
+
+    T = _encoded_eltype(input, name)
+
+    EncodedArray{T}(codec, innersize, data)
+end
+
+function LegendDataTypes.writedata(
+    output::HDF5.H5DataStore, name::AbstractString,
     x::VectorOfEncodedArrays{T,1,C},
     fulldatatype::DataType = typeof(x)
 ) where {T,C}
@@ -537,7 +631,8 @@ function LegendDataTypes.writedata(
 
     writedata(output, "$name/encoded_data", x.encoded)
     writedata(output, "$name/decoded_size", x.innersizes)
- 
+    writedata(output, "$name/sample_data", zero(T))
+
     dset = output[name]
 
     codec_name = LegendDataTypes.array_codecs[C]
@@ -546,6 +641,16 @@ function LegendDataTypes.writedata(
 
     setdatatype!(dset, fulldatatype)
     nothing
+end
+
+function _encoded_eltype(input::HDF5.H5DataStore, name::AbstractString)
+    haskey(input, "$name/sample_data") || return Int32
+    ds = input["$name/sample_data"]
+    try
+        eltype(ds)
+    finally
+        close(ds)
+    end
 end
 
 function LegendDataTypes.readdata(
@@ -557,11 +662,8 @@ function LegendDataTypes.readdata(
     N = _array_of_ntuple_innersize(size_vec_in)
     size_vec = _array_of_ntuple_innerconv(Int, size_vec_in)
 
-    SV = AT.var.ub
-    if SV isa DataType
-        N_expected = SV.parameters[1].parameters[1][1]
-        N_expected == N || throw(ErrorException("Trying to read a vector of encoded arrays with $N_expected dimensions, but data indicates $N dimensions"))
-    end
+    N_expected = _encoded_ndims(AT)
+    isnothing(N_expected) || N_expected == N || throw(ErrorException("Trying to read a vector of encoded arrays with $N_expected dimensions, but data indicates $N dimensions"))
 
     dset = input[name]
 
@@ -569,8 +671,7 @@ function LegendDataTypes.readdata(
     C = LegendDataTypes.array_codecs[codec_name]
     codec = read_from_properties(getattribute, dset, C)
 
-    # ToDo: How to avoid hardcoding T?
-    T = Int32
+    T = _encoded_eltype(input, name)
 
     return VectorOfEncodedArrays{T}(codec, size_vec, data_vec)
 end
@@ -588,7 +689,8 @@ function LegendDataTypes.writedata(
 
     writedata(output, "$name/encoded_data", x.encoded)
     writedata(output, "$name/decoded_size", innerlen)
- 
+    writedata(output, "$name/sample_data", zero(T))
+
     dset = output[name]
 
     codec_name = LegendDataTypes.array_codecs[C]
@@ -617,8 +719,7 @@ function LegendDataTypes.readdata(
     C = LegendDataTypes.array_codecs[codec_name]
     codec = read_from_properties(getattribute, dset, C)
 
-    # ToDo: How to avoid hardcoding T?
-    T = Int32
+    T = _encoded_eltype(input, name)
 
     VectorOfEncodedSimilarArrays{T}(codec, innersz, data_vec)
 end
@@ -633,12 +734,12 @@ function LegendDataTypes.writedata(
     nothing
 end
 
-# Hack:
 function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractVectorOfSimilarVectors}
-)
-    nestedview(readdata(input, name, AbstractArray{<:RealQuantity,2}))
+    AT::Type{<:AbstractArrayOfSimilarArrays{T,M,N} where T}
+) where {M,N}
+    data = readdata(input, name, AbstractArray{<:RealQuantity, M + N})
+    nestedview(data, Val(M))
 end
 
 
@@ -678,6 +779,5 @@ function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
     AT::Type{<:TypedTables.Table}
 )
-    # Hack:
-    TypedTables.Table(readdata(input, name, NamedTuple{AT.var.ub.body.parameters[1]}))
+    TypedTables.Table(readdata(input, name, NamedTuple{_table_names(AT)}))
 end

@@ -97,6 +97,19 @@ LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Bool}}) = begin
     LH5Array{Bool}(ds)
 end
 """
+    LH5Array(ds::HDF5.Dataset, ::Type{<:Enum})
+
+return a value of the given `Enum` type.
+"""
+LH5Array(ds::HDF5.Dataset, ET::Type{<:Enum}) = ET(getcontent(ds))
+"""
+    LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Enum}})
+
+return an in-memory array of `Enum` values.
+"""
+LH5Array(ds::HDF5.Dataset, AT::Type{<:AbstractArray{<:Enum}}) =
+    _enum_eltype(AT).(getcontent(ds))
+"""
     LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}})
 
 return an `ArraysOfSimilarArrays` where the field `data` is a `LH5Array` 
@@ -196,13 +209,10 @@ return an Array of NTuples
 """
 LH5Array(ds::HDF5.Dataset, AT::Type{<:AbstractArray{<:NTuple}}) = begin
     data = read(ds)
-    SV = AT.var.ub
     L = size(data, 1)
-    errs(L, M) = "Trying to read array of NTuples of length $M, but inner dimension of data has length $L"
-    if SV isa DataType
-        L_expected = SV.parameters[1].parameters[1][1]
-        L_expected == L || throw(ErrorException(errs(L, L_expected)))
-    end
+    L_expected = _inner_ntuple_length(AT)
+    isnothing(L_expected) || L_expected == L || throw(ErrorException(
+        "Trying to read array of NTuples of length $L_expected, but inner dimension of data has length $L"))
     _flatview_to_array_of_ntuple(data, NTuple{L, eltype(data)})
 end
 """
@@ -479,6 +489,23 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
+# write Enum values via their integer representation
+function create_entry(parent::LHDataStore, name::AbstractString,
+    data::Enum{T}; kwargs...) where {T}
+
+    parent.data_store[name] = T(data)
+    setdatatype!(parent.data_store[name], typeof(data))
+    nothing
+end
+
+function create_entry(parent::LHDataStore, name::AbstractString,
+    data::AbstractArray{<:Enum{T}}; kwargs...) where {T}
+
+    create_entry(parent, name, T.(data); kwargs...)
+    setdatatype!(parent.data_store[name], typeof(data))
+    nothing
+end
+
 # write AbstractArray{<:String}
 function create_entry(parent::LHDataStore, name::AbstractString, 
     data::AbstractArray{String, N}; kwargs...) where {N}
@@ -615,20 +642,23 @@ function create_entry(parent::LHDataStore, name::AbstractString,
 end
 
 # write NTuple
-function create_entry(parent::LHDataStore, name::AbstractString, 
-    data::T; kwargs...) where {L, U, T <: NTuple{L, U}}
-    
-    create_entry(parent, name, reinterpret(U, [data]); kwargs...)
-    setdatatype!(parent.data_store[name], T)
+function create_entry(parent::LHDataStore, name::AbstractString,
+    data::NTuple{L,Any}; kwargs...) where {L}
+
+    U = eltype(typeof(data))
+    isconcretetype(U) || throw(ArgumentError("Only homogeneous tuples are supported"))
+    create_entry(parent, name, collect(U, data); kwargs...)
+    setdatatype!(parent.data_store[name], typeof(data))
     nothing
 end
 
 # write Array{<:NTuple}
-function create_entry(parent::LHDataStore, name::AbstractString, 
-    data::AbstractArray{T, N}; kwargs...) where {N, L, U, T <: NTuple{L, U}}
+function create_entry(parent::LHDataStore, name::AbstractString,
+    data::AbstractArray{T}; kwargs...) where {T <: NTuple{L,Any} where L}
 
+    isconcretetype(eltype(T)) || throw(ArgumentError("Only homogeneous tuples are supported"))
     create_entry(parent, name, _flatview_of_array_of_ntuple(data); kwargs...)
-    setdatatype!(parent.data_store[name], Array{NTuple{L, U}, N})
+    setdatatype!(parent.data_store[name], typeof(data))
     nothing
 end
 
