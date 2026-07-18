@@ -3,7 +3,6 @@
 module LegendHDF5IO
 
 using ArraysOfArrays
-using ElasticArrays
 using EncodedArrays
 using LegendDataTypes
 using RadiationDetectorSignals
