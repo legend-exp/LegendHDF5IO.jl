@@ -144,6 +144,20 @@ using Unitful
                     lhd["vofv"] = vofv
                     @test append!(lhd["vofv"], vofv)[:] == newvofv
                 end
+                @testset "repeated append to VectorOfVectors" begin
+                    vofv = VectorOfVectors([[1.0, 2, 3], [4.0, 5]])
+                    lhd["vofv2"] = vofv
+                    dest = lhd["vofv2"]
+                    append!(dest, vofv)
+                    append!(dest, VectorOfVectors(Vector{Float64}[]))
+                    # backing array of this VectorOfVectors is longer than its content:
+                    nonspanning = VectorOfVectors(collect(1.0:9.0), [4, 6, 10])
+                    append!(dest, nonspanning)
+                    expected = [collect.(vofv); collect.(vofv); collect.(nonspanning)]
+                    @test lhd["vofv2"][:] == expected
+                    clen = LegendHDF5IO.LH5Array(lhd.data_store["vofv2/cumulative_length"])[:]
+                    @test clen == cumsum(length.(expected))
+                end
                 @testset "append VectorOfSimilarVectors" begin
                     aofa = VectorOfSimilarVectors(rand(UInt16, 55, 50)*u"m")
                     newaofa = vcat(aofa, aofa)
