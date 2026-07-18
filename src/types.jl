@@ -87,7 +87,7 @@ return a value with type Bool
 """
 LH5Array(ds::HDF5.Dataset, ::Type{<:Bool}) = begin
     units = getunits(ds)
-    units == NoUnits || throw(ErrorExceptions("Can't interpret dataset with units as Bool values"))
+    units == NoUnits || throw(ArgumentError("Can't interpret dataset with units as Bool values"))
     data = getcontent(ds)
     data > 0
 end
@@ -99,7 +99,7 @@ return a `LH5Array` with dimensions equal to that of `ds` and element type
 """
 LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Bool}}) = begin
     units = getunits(ds)
-    units == NoUnits || throw(ErrorExceptions("Can't interpret dataset with units as Bool values"))
+    units == NoUnits || throw(ArgumentError("Can't interpret dataset with units as Bool values"))
     LH5Array{Bool}(ds)
 end
 """
@@ -687,10 +687,11 @@ end
 
 extend the Table `dest` at `lhd[i]` with columns from `src`.
 """
-function add_entries!(lhd::LHDataStore, i::AbstractString, 
+function add_entries!(lhd::LHDataStore, i::AbstractString,
     src::Table, dest::Table=LH5Array(lhd.data_store[i]))
 
-    @assert length(dest) == length(src) "tables are not equal in length"
+    length(dest) == length(src) || throw(DimensionMismatch(
+        "Cannot add columns of length $(length(src)) to table of length $(length(dest))"))
     tbl = Table(dest, src)
     add_entries!(lhd, i, columns(src), columns(dest))
     HDF5.rename_attribute(lhd.data_store[i], "datatype", "datatype_old")
@@ -741,7 +742,7 @@ function _delete_entry(lhd::LHDataStore, nt::NamedTuple,
 
     if hasattribute(lhd.data_store[parent], :datatype)
         newkeys = setdiff(keys(nt), (Symbol(child),))
-        isempty(newkeys) && throw("Empty object at $parent not allowed")
+        isempty(newkeys) && throw(ArgumentError("Cannot delete last entry \"$child\" of \"$parent\""))
         new_nt = (;[k => nt[k] for k in newkeys]...)
         HDF5.rename_attribute(lhd.data_store[parent], "datatype", "datatype_old")
         HDF5.delete_attribute(lhd.data_store[parent], "datatype_old")
