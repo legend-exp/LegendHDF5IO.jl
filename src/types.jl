@@ -424,7 +424,8 @@ Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
 Base.haskey(lh::LHDataStore, i::AbstractString) = haskey(lh.data_store, i)
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
-Base.getindex(lh::LHDataStore, i::Any...) = getindex(lh, join(string.(i), "/"))
+Base.getindex(lh::LHDataStore, i::Any, j::Any...) =
+    getindex(lh, join(string.((i, j...)), "/"))
 
 Base.length(lh::LHDataStore) = length(keys(lh))
 
@@ -459,8 +460,8 @@ function Base.setindex!(lh::LHDataStore, v, i::AbstractString)
     nothing
 end
 
-Base.setindex!(lh::LHDataStore, v, i::Any...) = 
-    setindex!(lh, v, join(string.(i), "/"))
+Base.setindex!(lh::LHDataStore, v, i::Any, j::Any...) =
+    setindex!(lh, v, join(string.((i, j...)), "/"))
 
 LegendDataTypes.readdata(input::LHDataStore, args...; kwargs...) = readdata(input.data_store, args...; kwargs...)
 LegendDataTypes.writedata(output::LHDataStore, args...; kwargs...) = writedata(output.data_store, args...; kwargs...)    
@@ -778,8 +779,6 @@ function add_entries!(lhd::LHDataStore, i::AbstractString,
         "Cannot add columns of length $(length(src)) to table of length $(length(dest))"))
     tbl = Table(dest, src)
     add_entries!(lhd, i, columns(src), columns(dest))
-    HDF5.rename_attribute(lhd.data_store[i], "datatype", "datatype_old")
-    HDF5.delete_attribute(lhd.data_store[i], "datatype_old")
     setdatatype!(lhd.data_store[i], typeof(tbl))
     nothing
 end
@@ -797,8 +796,6 @@ function add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
     for k in keys(src)
         lhd["$(i)/$(k)"] = src[k]
     end
-    HDF5.rename_attribute(lhd.data_store[i], "datatype", "datatype_old")
-    HDF5.delete_attribute(lhd.data_store[i], "datatype_old")
     setdatatype!(lhd.data_store[i], typeof(new_nt))
     nothing
 end
@@ -828,8 +825,6 @@ function _delete_entry(lhd::LHDataStore, nt::NamedTuple,
         newkeys = setdiff(keys(nt), (Symbol(child),))
         isempty(newkeys) && throw(ArgumentError("Cannot delete last entry \"$child\" of \"$parent\""))
         new_nt = (;[k => nt[k] for k in newkeys]...)
-        HDF5.rename_attribute(lhd.data_store[parent], "datatype", "datatype_old")
-        HDF5.delete_attribute(lhd.data_store[parent], "datatype_old")
         setdatatype!(lhd.data_store[parent], typeof(new_nt))
     end
     HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
@@ -841,9 +836,6 @@ function _delete_entry(lhd::LHDataStore, tbl::Table, parent::AbstractString,
 
     _delete_entry(lhd, columns(tbl), parent, child)
     new_tbl = Table(lhd[parent])
-    # adjust datatype of parent
-    HDF5.rename_attribute(lhd.data_store[parent], "datatype", "datatype_old")
-    HDF5.delete_attribute(lhd.data_store[parent], "datatype_old")
     setdatatype!(lhd.data_store[parent], typeof(new_tbl))
     nothing
 end
