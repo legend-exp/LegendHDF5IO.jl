@@ -59,7 +59,8 @@ function LegendDataTypes.writedata(
     x::Histogram,
     fulldatatype::DataType = typeof(x)
 )
-    @assert fulldatatype == typeof(x)
+    fulldatatype == typeof(x) || throw(ArgumentError(
+        "Custom datatype not supported when writing histograms"))
     writedata(output, name, _histogram_to_nt(x))
 end
 

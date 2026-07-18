@@ -78,13 +78,13 @@ function datatype_from_string(s::AbstractString)
             elseif tp == "array_of_encoded_arrays"
                 length(dims) == 2 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]; M = dims[2]
-                N != 2 || throw(ErrorException("Only one-dimensional arrays of encoded arrays are supported"))
-                VectorOfEncodedArrays{<:T,dims[1]}
+                N == 1 || throw(ErrorException("Only one-dimensional arrays of encoded arrays are supported"))
+                VectorOfEncodedArrays{<:T,M}
             elseif tp == "array_of_encoded_equalsized_arrays"
                 length(dims) == 2 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]; M = dims[2]
-                N != 2 || throw(ErrorException("Only one-dimensional arrays of encoded arrays are supported"))
-                VectorOfEncodedSimilarArrays{<:T,dims[1]}
+                N == 1 || throw(ErrorException("Only one-dimensional arrays of encoded arrays are supported"))
+                VectorOfEncodedSimilarArrays{<:T,M}
             elseif tp == "fixedsize_array"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
@@ -373,7 +373,7 @@ function LegendDataTypes.readdata(
 )
     dset = input[name]
     units = getunits(dset)
-    units == NoUnits || throw(ErrorExceptions("Can't interpret dataset with units as Bool values"))
+    units == NoUnits || throw(ArgumentError("Can't interpret dataset with units as Bool values"))
     data = getcontent(dset)
     # Broadcast will return BitArray, map would return Array{UInt8}:
     (x -> x > 0).(data)
@@ -607,7 +607,7 @@ function LegendDataTypes.readdata(
 
     # Limit to vector for encoded vectors for now:
     innerlen = readdata(input, "$name/decoded_size")
-    @assert innerlen isa Integer
+    innerlen isa Integer || throw(ErrorException("Expected scalar integer \"decoded_size\" in \"$name\""))
     innersz = (innerlen,)
     N = 1
 
