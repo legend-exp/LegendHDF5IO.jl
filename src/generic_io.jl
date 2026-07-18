@@ -5,11 +5,7 @@
 # with Base.read/write, open/close, etc., and atomic file names.
 
 
-const default_compression = ("shuffle", (), "deflate", 3)
-
-
 const datatype_regexp = r"""^(([A-Za-z_]*)(<([0-9,]*)>)?)(\{(.*)\})?$"""
-const arraydims_regexp = r"""^<([0-9,]*)>$"""
 
 function _eldatatype_from_string(s::Union{Nothing,AbstractString})
     if isnothing(s) || isempty(s)
@@ -52,9 +48,6 @@ _encoded_ndims(::Type{<:VectorOfEncodedArrays{T,N} where T}) where {N} = N
 _encoded_ndims(::Type) = nothing
 
 _table_names(::Type{<:TypedTables.Table{<:NamedTuple{names}}}) where {names} = names
-
-Base.@propagate_inbounds _tuple_droplast(x::NTuple{N,Any}, ::Val{M}) where {N,M} =
-    Base.ntuple(i -> x[i], Val{N-M}())
 
 _namedtuple_type(members::AbstractVector{<:AbstractString}) = NamedTuple{(Symbol.(members)...,)}
 
@@ -178,16 +171,6 @@ datatype_to_string(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K 
 datatype_to_string(::Type{<:Histogram{T, N}}) where {T, N} = 
     "histogram<$N>$(_inner_datatype_to_string(T))"
 
-function _eltype(dset::HDF5.Dataset)
-    dtype = HDF5.datatype(dset)
-    try
-        HDF5.hdf5_to_julia_eltype(dtype)
-    finally
-        close(dtype)
-    end
-end
-
-
 function _cumulative_length(A::VectorOfArrays)
     elem_ptr = ArraysOfArrays.internal_element_ptr(A)
     elem_ptr[(firstindex(elem_ptr) + 1):end] .- first(elem_ptr)
@@ -203,10 +186,6 @@ function _element_ptrs(clen::Vector{<:Integer})
 end
 
 
-# _without_units(A::Array, unit::Unitful.Unitlike) = ustrip.(uconvert.(unit, A))
-# _with_units(A::Array, unit::Unitful.Unitlike) = A * unit
-
-
 function hasattribute(
     obj::Union{HDF5.Dataset, HDF5.H5DataStore}, key::Symbol
 )
@@ -219,9 +198,15 @@ end
 function getattribute(
     obj::Union{HDF5.Dataset, HDF5.H5DataStore}, key::Symbol, ::Type{T}
 ) where {T<:Union{AbstractString,Real}}
-    key_str = String(key)
-    attributes = HDF5.attributes(obj)
-    x = read(attributes[key_str])
+    # Close the attribute handle explicitly: a lingering open handle keeps
+    # the attribute alive, so deleting and re-creating it under the same
+    # name (setdatatype!) would leave readers seeing the old value.
+    attr = HDF5.attributes(obj)[String(key)]
+    x = try
+        read(attr)
+    finally
+        close(attr)
+    end
     x isa T ? x : convert(T, x)
 end
 
@@ -260,42 +245,22 @@ end
 LegendDataTypes.getunits(dset::HDF5.Dataset) = units_from_string(getattribute(dset, :units, ""))
 
 function LegendDataTypes.setunits!(dset::HDF5.Dataset, units::Unitful.Unitlike)
-    ustr = units_to_string(units)
-    # @debug "setunits!($(_infostring(dset)), \"$ustr\")"
-    setattribute!(dset, :units, ustr)
+    setattribute!(dset, :units, units_to_string(units))
 end
 
 
 default_datatype(dset::HDF5.Dataset) = AbstractArray{<:RealQuantity,length(size(dset))}
 default_datatype(df::HDF5.H5DataStore) = NamedTuple{(Symbol.(keys(df))...,)}
 
-_size(dset::HDF5.Dataset) = size(dset)
-_size(df::HDF5.H5DataStore) = ()
-
-# HDF5.H5DataStore
-# HDF5.Dataset
-_infostring(x::HDF5.Group) = "group \"$(HDF5.name(x))\""
-_infostring(x::HDF5.Dataset) = "dataset \"$(HDF5.name(x))\" with size $(size(x)) of $(eltype(x))"
-
 function getdatatype(input::Union{HDF5.Dataset, HDF5.H5DataStore})
     dtstr = getattribute(input, :datatype, "")
-    dt = isempty(dtstr) ? default_datatype(input) : datatype_from_string(dtstr)
-    # @debug "getdatatype($(_infostring(input))) = $dt"
-    dt
+    isempty(dtstr) ? default_datatype(input) : datatype_from_string(dtstr)
 end
 
 function setdatatype!(output::Union{HDF5.Dataset, HDF5.H5DataStore}, datatype::Type)
     dtstr = datatype_to_string(datatype)
     hasattribute(output, :datatype) && HDF5.delete_attribute(output, "datatype")
     setattribute!(output, :datatype, dtstr)
-end
-
-function getinfo(dset::HDF5.Dataset)
-    (
-        datatype = getattribute(dset, :datatype, ""),
-        units = getunits(dset),
-        cumsum_length_ds = getattribute(dset, :cumsum_length_ds, ""),
-    )
 end
 
 
@@ -337,13 +302,9 @@ function LegendDataTypes.writedata(
     fulldatatype::DataType = typeof(x)
 ) where {T<:RealQuantity}
     units = unit(eltype(x))
-    # @debug "name" name
     if units == NoUnits
-        # @debug "without units"
-        #output[name, "shuffle", (), "deflate", 3] = x
         output[name] = x
     else
-        # @debug "with units"
         output[name] = ustrip.(x)
         setunits!(output[name], units)
     end
@@ -360,7 +321,7 @@ function LegendDataTypes.readdata(
 )
     dset = input[name]
     _ndims(dset) == _ndims(T) || throw(ArgumentError("Dataset has $(_ndims(dset)) dimensions but expected $(_ndims(T)) from datatype"))
-    data = getcontent(dset)#::AT
+    data = getcontent(dset)
     units = getunits(dset)
     if units == NoUnits
         data
@@ -541,7 +502,7 @@ function LegendDataTypes.readdata(
     ::Type{<:String}
 )
     dset = input[name]
-    read(dset)#::AT
+    read(dset)
 end
 
 
@@ -581,7 +542,7 @@ function LegendDataTypes.readdata(
 )
     data = readdata(input, "$name/flattened_data")
     clen = readdata(input, "$name/cumulative_length")
-    data_vec = VectorOfVectors(data, _element_ptrs(clen))
+    VectorOfVectors(data, _element_ptrs(clen))
 end
 
 
@@ -769,7 +730,6 @@ function LegendDataTypes.writedata(
     x::Any,
     fulldatatype::DataType = typeof(x)
 )
-    # @debug("writedata(\"$(HDF5.name(output))\", \"$name\", $fulldatatype")
     Tables.istable(x) || throw(ArgumentError("Value to write, of type $(typeof(x)), is not a table"))
     cols = Tables.columns(Table(x))
     writedata(output, name, cols, fulldatatype)
