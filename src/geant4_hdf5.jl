@@ -1,6 +1,15 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
 export Geant4HDF5Input
+
+"""
+    Geant4HDF5Input <: AbstractLegendInput
+
+Input wrapper for Geant4 HDF5 files in GEARS or g4simple layout.
+
+Use via `open(filename, Geant4HDF5Input)` (or the corresponding `do`-block
+form) and `read(input)`, which returns a hits `Table`.
+"""
 struct Geant4HDF5Input <: AbstractLegendInput
     hdf5file::HDF5.File
 end
@@ -16,6 +25,15 @@ end
 Base.open(filename::AbstractString, ::Type{Geant4HDF5Input}) =
     Geant4HDF5Input(HDF5.h5open(filename, "r"))
 
+function Base.open(f::Function, filename::AbstractString, ::Type{Geant4HDF5Input})
+    input = open(filename, Geant4HDF5Input)
+    try
+        f(input)
+    finally
+        close(input)
+    end
+end
+
 Base.close(input::Geant4HDF5Input) = close(input.hdf5file)
 
 function Base.getindex(input::Geant4HDF5Input, ::Colon)
@@ -27,123 +45,92 @@ function Base.read(input::Geant4HDF5Input)
         read(GEARS_HDF5Input(input.hdf5file))
     elseif haskey(input.hdf5file, "/default_ntuples/g4sntuple/")
         read(G4SIMPLE_HDF5Input(input.hdf5file))
+    else
+        throw(ErrorException("Unrecognized Geant4 HDF5 file layout, expected" *
+            " group \"/default_ntuples/t\" (GEARS) or" *
+            " \"/default_ntuples/g4sntuple\" (g4simple)"))
     end
 end
 
-function Base.read(input::GEARS_HDF5Input)
+_g4_column(::Type{T}, g, path::AbstractString, indices, default, n::Int) where {T} =
+    haskey(g, path) ? T.(g[path][:][indices]) : fill(T(default), n)
 
-    function _get_indices_raw(g)
-        len = filter(x->x!=0x00, g["de/pages"][:])
-        indices_raw = []
-        start = 0
-        for i in len
-            start+=1
-            stop = start+i-1
-            push!(indices_raw, collect(start:stop))
-            start = stop
-        end
-        indices_raw
+# Consecutive per-event hit index ranges from the per-event hit counts
+function _gears_hit_ranges(hits_per_event::AbstractVector{<:Integer})
+    ranges = Vector{UnitRange{Int}}(undef, length(hits_per_event))
+    stop = 0
+    for (i, l) in enumerate(hits_per_event)
+        start = stop + 1
+        stop = start + Int(l) - 1
+        ranges[i] = start:stop
     end
+    ranges
+end
 
-    h5f = input.hdf5file
-    g = h5f["default_ntuples/t/"]
-    indices_raw = _get_indices_raw(g)
+function Base.read(input::GEARS_HDF5Input)
+    g = input.hdf5file["default_ntuples/t/"]
+    hit_ranges = _gears_hit_ranges(filter(!iszero, g["de/pages"][:]))
     h5_edep = g["de_data/pages"][:]
-    indices_non_zero_energies  = filter(i-> sum(h5_edep[i]) > 0.0, indices_raw) # Filters events that don't deposit any energy
-    indices = vcat(indices_non_zero_energies...)
+    # Drop events without any energy deposition:
+    event_ranges = filter(r -> sum(view(h5_edep, r)) > 0, hit_ranges)
+    indices = reduce(vcat, event_ranges; init = Int[])
     n_ind = length(indices)
 
-    evtno = Int32.(vcat([ [j for i in 1:length(indices_non_zero_energies[j])] for j in 1:length(indices_non_zero_energies) ]...))
-    detno = try Int32.(g["vlm_data/pages"][:][indices]) catch ; ones(Int32, n_ind) end
-    thit = ( try Float32.(g["t_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"s"
-    edep = ( try Float32.(g["de_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"keV"
+    evtno = Vector{Int32}(undef, n_ind)
+    offset = 0
+    for (j, r) in enumerate(event_ranges)
+        evtno[offset .+ (1:length(r))] .= Int32(j)
+        offset += length(r)
+    end
 
-    x0 = try Float32.(g["x_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
-    y0 = try Float32.(g["y_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
-    z0 = try Float32.(g["z_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
+    col(::Type{T}, path, default) where {T} = _g4_column(T, g, path, indices, default, n_ind)
 
-    pos = [ SVector{3}(([ x0[i], y0[i], z0[i] ] .* u"mm")...) for i in 1:n_ind ]
-
-
-    ekin = ( try Float32.(g["k_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"keV"# kinetic Energy of track [keV]
-    stp = try Int32.(g["stp_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # step number
-    l = ( try Float32.(g["l_data/pages"][:][indices]) catch ; zeros(Float32, n_ind) end  ) .* u"mm"# step length
-    mom = try Int32.(g["pid_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # parent id
-    trk = try Int32.(g["trk_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # trk id
-    pdg = try Int32.(g["pdg_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # particle id
-    pro = try Int32.(g["pro_data/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # process id
+    x0 = col(Float32, "x_data/pages", 0)
+    y0 = col(Float32, "y_data/pages", 0)
+    z0 = col(Float32, "z_data/pages", 0)
 
     hits = TypedTables.Table(
         evtno = evtno,
-        detno = detno,
-        thit = thit,
-        edep = edep,
-        pos = pos,
-        ekin = ekin,
-        stp = stp,
-        l = l,
-        mom = mom,
-        trk = trk,
-        pdg = pdg,
-        pro = pro,
+        detno = col(Int32, "vlm_data/pages", 1),
+        thit = col(Float32, "t_data/pages", 0) .* u"s",
+        edep = Float32.(h5_edep[indices]) .* u"keV",
+        pos = [SVector(x0[i], y0[i], z0[i]) * u"mm" for i in 1:n_ind],
+        ekin = col(Float32, "k_data/pages", 0) .* u"keV",
+        stp = col(Int32, "stp_data/pages", 0),
+        l = col(Float32, "l_data/pages", 0) .* u"mm",
+        mom = col(Int32, "pid_data/pages", 0),
+        trk = col(Int32, "trk_data/pages", 0),
+        pdg = col(Int32, "pdg_data/pages", 0),
+        pro = col(Int32, "pro_data/pages", 0),
     )
     return hits
 end
 
 function Base.read(input::G4SIMPLE_HDF5Input)
-    function _get_indices_raw(g)
-        len = filter(x->x!=0x00, g["e/pages"][:])
-        indices_raw = []
-        start = 0
-        for i in len
-            start+=1
-            stop = start+i-1
-            push!(indices_raw, collect(start:stop))
-            start = stop
-        end
-        indices_raw
-    end
+    g = input.hdf5file["default_ntuples/g4sntuple/"]
+    evtno = Int32.(g["event/pages"][:])
+    n_ind = length(evtno)
 
-    h5f = input.hdf5file
-    g = h5f["default_ntuples/g4sntuple/"]
-    # indices_raw = _get_indices_raw(g)
-    h5_edep = g["event/pages"][:]
-    # indices_non_zero_energies  = filter(i-> sum(h5_edep[i]) > 0.0, indices_raw) # Filters events that don't deposit any energy
-    # indices = vcat(indices_non_zero_energies...)
-    n_ind = length(h5_edep)
-    indices = [i for i in 1:n_ind]
+    col(::Type{T}, path, default) where {T} = _g4_column(T, g, path, :, default, n_ind)
 
-    evtno = try Int32.(g["event/pages"][:][indices]) catch ; ones(Int32, n_ind) end
-    irep = try Int32.(g["iRep/pages"][:][indices]) catch ; ones(Int32, n_ind) end
-    detno = try Int32.(g["volID/pages"][:][indices]) catch ; ones(Int32, n_ind) end
-    thit = ( try Float32.(g["t/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"ns"
-    edep = ( try Float32.(g["Edep/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"MeV"
+    x0 = col(Float32, "x/pages", 0)
+    y0 = col(Float32, "y/pages", 0)
+    z0 = col(Float32, "z/pages", 0)
 
-    x0 = try Float32.(g["x/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
-    y0 = try Float32.(g["y/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
-    z0 = try Float32.(g["z/pages"][:][indices]) catch ; zeros(Float32, n_ind) end
-
-    pos = [ SVector{3}(([ x0[i], y0[i], z0[i] ] .* u"mm")...) for i in 1:n_ind ]
-
-
-    ekin = ( try Float32.(g["KE/pages"][:][indices]) catch ; zeros(Float32, n_ind) end ) .* u"MeV" # kinetic Energy of track
-    stp = try Int32.(g["step/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # step number
-    mom = try Int32.(g["parentID/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # parent id
-    trk = try Int32.(g["trackID/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # trk id
-    pdg = try Int32.(g["pid/pages"][:][indices]) catch ; zeros(Int32, n_ind) end # particle id
-
+    # The detector is identified by the volume copy number (iRep), while
+    # volID identifies the logical volume:
     hits = TypedTables.Table(
         evtno = evtno,
-        detno = irep,
-        thit = thit,
-        edep = edep,
-        pos = pos,
-        ekin = ekin,
-        volID = detno,
-        stp = stp,
-        mom = mom,
-        trk = trk,
-        pdg = pdg,
+        detno = col(Int32, "iRep/pages", 1),
+        thit = col(Float32, "t/pages", 0) .* u"ns",
+        edep = col(Float32, "Edep/pages", 0) .* u"MeV",
+        pos = [SVector(x0[i], y0[i], z0[i]) * u"mm" for i in 1:n_ind],
+        ekin = col(Float32, "KE/pages", 0) .* u"MeV",
+        volID = col(Int32, "volID/pages", 1),
+        stp = col(Int32, "step/pages", 0),
+        mom = col(Int32, "parentID/pages", 0),
+        trk = col(Int32, "trackID/pages", 0),
+        pdg = col(Int32, "pid/pages", 0),
     )
     return hits
 end
