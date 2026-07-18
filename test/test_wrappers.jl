@@ -5,8 +5,10 @@ using LegendHDF5IO
 
 using ArraysOfArrays
 using EncodedArrays
+using HDF5
 using Measurements
 using RadiationDetectorSignals
+using StaticArrays
 using StatsBase
 using TypedTables
 using Unitful
@@ -45,6 +47,10 @@ using Unitful
                     boolarray = rand(Bool, 10)
                     @test setindex!(lhd, boolarray, "boolarray") |> isnothing
                     @test lhd["boolarray"][:] == boolarray
+                    # Bool data must be stored as integers for h5py compatibility
+                    dt = HDF5.datatype(lhd.data_store["boolarray"])
+                    @test HDF5.API.h5t_get_class(dt.id) == HDF5.API.H5T_INTEGER
+                    close(dt)
                 end
                 @testset "IO of Array{<:Quantity}" begin
                     y = rand(10)*u"mm"
@@ -67,6 +73,16 @@ using Unitful
                     nt = (a=10, b=10.0u"mm")
                     @test setindex!(lhd, nt, "nt") |> isnothing
                     @test lhd["nt"] == nt
+                    @test setindex!(lhd, NamedTuple(), "nt0") |> isnothing
+                    @test lhd["nt0"] == NamedTuple()
+                end
+                @testset "IO of Array{<:SVector}" begin
+                    sv = [SVector(1.0, 2.0, 3.0), SVector(4.0, 5.0, 6.0)]
+                    @test setindex!(lhd, sv, "sv") |> isnothing
+                    @test lhd["sv"] == sv
+                    svu = [SVector(1.0, 2.0)u"mm", SVector(3.0, 4.0)u"mm"]
+                    @test setindex!(lhd, svu, "svu") |> isnothing
+                    @test lhd["svu"] == svu
                 end
                 @testset "IO of Histogram" begin
                     h = fit(
@@ -123,6 +139,10 @@ using Unitful
                     mvu = mv .* u"s"
                     @test setindex!(lhd, mvu, "mv_unit") |> isnothing
                     @test lhd["mv_unit"] == mvu
+                    getdt(k) = LegendHDF5IO.getattribute(lhd.data_store[k], :datatype, "")
+                    @test getdt("m") == "measurement"
+                    @test getdt("mv") == "array<1>{measurement}"
+                    @test getdt("mv_unit") == "array<1>{measurement}"
                 end
             end
         end

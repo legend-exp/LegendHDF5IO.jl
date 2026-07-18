@@ -60,9 +60,9 @@ function datatype_from_string(s::AbstractString)
         tp = m[2]
         content = m[6]
         if tp == "struct"
-            _namedtuple_type(split(content, ","))
+            _namedtuple_type(split(content, ","; keepempty = false))
         elseif tp == "table"
-            TypedTables.Table{<:_namedtuple_type(split(content, ","))}
+            TypedTables.Table{<:_namedtuple_type(split(content, ","; keepempty = false))}
         elseif tp == "ntuple"
             T = _eldatatype_from_string(content)
             (NTuple{N,<:T} where N)
