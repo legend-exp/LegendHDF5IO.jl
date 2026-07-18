@@ -39,7 +39,7 @@ mutable struct LH5Array{T, N} <: AbstractArray{T, N}
 end
 
 const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
-const LHIndexType = Union{Colon, AbstractRange{Int}}
+const LHIndexType = Union{Colon, AbstractRange{Int}, AbstractVector{Int}}
 const VectorOfRDWaveforms{T, U, VVT, VVU} = ArrayOfRDWaveforms{T, U, 1, VVT, VVU}
 const LH5VoV{T} = VectorOfVectors{T, LH5Array{T, 1}}
 const LH5ArrayOfRDWaveforms{T, U, N, VVT} = 
@@ -122,7 +122,7 @@ end
 return a `NamedTuple` where each `field` is the output of `LH5Array` applied to it.
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:NamedTuple{T}}) where {T} =
-    NamedTuple{T}(LH5Array.([ds[k] for k in String.(T)]))
+    NamedTuple{T}(map(k -> LH5Array(ds[String(k)]), T))
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:TypedTables.Table{<:NamedTuple{(T)}}}) where T
 
@@ -196,7 +196,8 @@ end
 
 return an `Tuple`
 """
-LH5Array(ds::HDF5.Dataset, ::Type{<:Tuple}) = tuple(LH5Array(ds, Vector)...)
+LH5Array(ds::HDF5.Dataset, ::Type{<:Tuple}) =
+    Tuple(LH5Array(ds, AbstractArray{<:RealQuantity, 1}))
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Tuple}})
 
@@ -279,6 +280,71 @@ end
 Base.getindex(lh::LH5AoSA{T, M}, idxs::LHIndexType...) where {T, M} = begin
     indices = (ArraysOfArrays._ncolons(Val{M}())..., idxs...)
     ArrayOfSimilarArrays{T, M}(lh.data[indices...])
+end
+
+# Scattered reads along the last (event) dimension, coalescing runs of
+# consecutive indices into a single HDF5 hyperslab read each:
+
+function _contiguous_runs(idxs::AbstractVector{<:Integer})
+    runs = Vector{UnitRange{Int}}()
+    isempty(idxs) && return runs
+    start = prev = Int(first(idxs))
+    for v in Iterators.drop(idxs, 1)
+        if v == prev + 1
+            prev = Int(v)
+        else
+            push!(runs, start:prev)
+            start = prev = Int(v)
+        end
+    end
+    push!(runs, start:prev)
+    runs
+end
+
+const _scatter_bulk_max_bytes = 2^20
+
+function _getindex_scattered_lastdim(
+    lh::LH5Array{T, N}, front::NTuple{M, Any}, ilast::AbstractVector{<:Integer}
+) where {T, N, M}
+    if !issorted(ilast)
+        p = sortperm(ilast)
+        r = _getindex_scattered_lastdim(lh, front, ilast[p])
+        return r[ntuple(_ -> :, ndims(r) - 1)..., invperm(p)]
+    end
+    isempty(ilast) && return lh[front..., 1:0]
+    lo, hi = Int(first(ilast)), Int(last(ilast))
+    span = hi - lo + 1
+    row_bytes = sizeof(T) * prod(Base.front(size(lh)))
+    # For small or densely covered index spans a single bounding read is
+    # cheaper than one read per index run:
+    if span * row_bytes <= _scatter_bulk_max_bytes || 4 * length(ilast) >= span
+        bulk = lh[front..., lo:hi]
+        return bulk[ntuple(_ -> :, ndims(bulk) - 1)..., ilast .- (lo - 1)]
+    end
+    runs = _contiguous_runs(ilast)
+    parts = [lh[front..., r] for r in runs]
+    K = ndims(first(parts))
+    out = similar(first(parts), ntuple(i -> size(first(parts), i), K - 1)..., length(ilast))
+    colons = ntuple(_ -> :, K - 1)
+    offset = 0
+    for part in parts
+        len = size(part, K)
+        out[colons..., offset .+ (1:len)] = part
+        offset += len
+    end
+    out
+end
+
+Base.getindex(lh::LH5Array{T, N},
+    idxs::Vararg{Union{HDF5.IndexType, AbstractVector{<:Integer}}, N}
+) where {T, N} = begin
+    front, ilast = Base.front(idxs), idxs[end]
+    if ilast isa AbstractVector{<:Integer} && !(ilast isa AbstractRange) &&
+        all(i -> i isa HDF5.IndexType, front)
+        _getindex_scattered_lastdim(lh, front, ilast)
+    else
+        invoke(getindex, Tuple{AbstractArray{T, N}, Vararg{Any, N}}, lh, idxs...)
+    end
 end
 
 Base.size(lh::LH5Array{T, N}) where {T, N} = begin

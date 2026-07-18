@@ -147,6 +147,36 @@ using Unitful
             end
         end
     end
+    @testset verbose=true "scattered reads" begin
+        mktempdir(pwd()) do tmp
+            path = joinpath(tmp, "tmp.lh5")
+            lh5open(path, "cw") do lhd
+                x = rand(Float32, 1000)
+                lhd["x"] = x
+                A = lhd["x"]
+                idxs = [1, 2, 3, 10, 11, 500, 999]
+                @test A[idxs] == x[idxs]
+                unsorted = [7, 3, 3, 950, 1]
+                @test A[unsorted] == x[unsorted]
+                @test A[Int[]] == Float32[]
+
+                # rows large enough that scattered reads coalesce runs
+                # instead of reading the bounding range:
+                data = rand(UInt16, 700, 2000)
+                lhd["aofa"] = nestedview(data)
+                W = lhd["aofa"]
+                sparse_idxs = [2, 3, 4, 700, 1999]
+                @test W[sparse_idxs] == nestedview(data)[sparse_idxs]
+                @test W.data[:, sparse_idxs] == data[:, sparse_idxs]
+                dense_idxs = collect(4:2:1000)
+                @test W[dense_idxs] == nestedview(data)[dense_idxs]
+
+                vv = VectorOfVectors([rand(rand(1:20)) for _ in 1:100])
+                lhd["vv"] = vv
+                @test lhd["vv"][[2, 3, 4, 70]] == vv[[2, 3, 4, 70]]
+            end
+        end
+    end
     @testset verbose=true "test append functionality" begin
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
