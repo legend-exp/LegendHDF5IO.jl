@@ -5,39 +5,34 @@ export LHDataStore, LH5Array
 """
     LH5Array{T, N} <: AbstractArray{T, N}
 
-Array wrapper for HDF5.Datasets following the LEGEND data format as in ".lh5"
-files. 
+Array wrapper for an `HDF5.Dataset` following the LEGEND data format, as in
+".lh5" files.
 
-An `LH5Array` contains a HDF5.Dataset `file` and Unitful.Unitlike `units` as 
-returned by `getunits`(file)`. `getindex` and `append!` are supported.
-`getindex` essentially falls back to `getindex` for `HDF5.Dataset`s, 
-enabling the user to always read in the desired part of an ondisk array without 
-having to load it in whole beforehand.
-`append!` uses chunks to append the data provided to the ondisk array. **It is
-important to note, that data is always appended along the last dimension of an 
-array**
+`getindex` reads the requested part of the on-disk array, so data can be
+read partially without loading the whole array first. `append!` extends the
+on-disk array (which requires it to be chunked); data is always appended
+along the last dimension.
 
 # Default constructors
 
 ```julia
-LH5Array{T}(ds::HDF5.Dataset, u::Unitful.Unitlike)
 LH5Array{T, N}(ds::HDF5.Dataset)
+LH5Array{T}(ds::HDF5.Dataset)
 LH5Array(ds::Union{HDF5.Dataset, HDF5.H5DataStore})
-
 ```
 
-# Examples:
+# Example:
+
 ```julia
 julia> using HDF5
 julia> f = h5open("path/to/lh5/file", "r")
-julia> l5 = LH5Array(f["path/to/HDF5/Dataset"])
+julia> lh = LH5Array(f["path/to/HDF5/Dataset"])
 [...]
-julia> x = lh[1:10]     # load the first 10 elements of the ondisk array
+julia> x = lh[1:10]     # load the first 10 elements of the on-disk array
 [...]
-julia> append!(lh, x)   # append those 10 elements to the ondisk array 
+julia> append!(lh, x)   # append those 10 elements to the on-disk array
 [...]
 ```
-
 """
 mutable struct LH5Array{T, N} <: AbstractArray{T, N}
     file::HDF5.Dataset
@@ -158,10 +153,10 @@ LH5Array(ds::HDF5.H5DataStore,
     cumulen = LH5Array(ds["cumulative_length"])[:]
     VectorOfVectors(data, _element_ptrs(cumulen))
 end
-""""
+"""
     LH5Array(ds::HDF5.H5DataStore, ::Type{<:Histogram{<:RealQuantity}})
 
-return a `Histogram`. 
+return a `Histogram`.
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:Histogram{<:RealQuantity}}) = begin
     T = (:binning, :weights, :isdensity)
@@ -362,38 +357,34 @@ end
 """
     LHDataStore <: AbstractDict{String,Any}
 
-Dictionary wrapper for `HDF5.H5DataStore` objects, which were constructed 
-according to the LEGEND data format in ".lh5" files. 
+Dictionary wrapper for an `HDF5.H5DataStore` (typically an `HDF5.File`, but
+may also be e.g. an `HDF5.Group`) following the LEGEND data format, as in
+".lh5" files.
 
 Constructor:
 
 ```julia
-LHDataStore(h5ds::HDF5.DataStore)
+LHDataStore(h5ds::HDF5.H5DataStore, usechunks::Bool)
 ```
 
-This return an `LHDataStore` object that wraps an `h5ds` which will typically
-be an `HDF5.File` be may also be an `HDF5.H5DataStore` (e.g. an `HDF5.Group`).
-in general.
+To read from or write to ".lh5" files directly (without using `HDF5.h5open`
+first), use [`lh5open`](@ref).
 
-To read or write ".lh5" file directly (without using `HDF5.h5open` first),
-we recommend using [`lh5open`](@ref).
+`getindex(lh::LHDataStore, s)` returns the output of [`LH5Array`](@ref)
+applied to `lh.data_store[s]`, so arrays are wrapped lazily. `setindex!`
+creates and writes `HDF5.Group`s and `HDF5.Dataset`s. With `usechunks = true`
+datasets are created chunked and extensible, so they can later be extended
+with `append!`; the chunk size is taken from the first array written. Supported
+value types include `RealQuantity` and arrays thereof, `Bool`, `String`,
+`Symbol`, `Enum`s, (arrays of) `NTuple`s and `StaticVector`s,
+`ArraysOfSimilarArrays`, `VectorOfVectors`, encoded arrays, `NamedTuple`s,
+tables, `AbstractVector{<:RDWaveform}` and `Histogram`. **For arrays, the
+last axis is assumed to correspond to the event number index.**
 
-Supports `getindex` and `setindex!` where `getindex(lh::LHDataStore, s)` returns 
-the output of [`LH5Array`](@ref) applied to `data_store[s]` and `setindex!` 
-creates and writes `HDF5.Group`s and `HDF5.Dataset`s using chunks of size 1000 
-to the ondisk array. Currently supported are objects with types:
-`AbstractArray{<:RealQuantity}`, `ArraysOfSimilarArrays{<:RealQuantity}`, 
-`VectorOfVectors{<:RealQuantity}`, `NamedTuple`,`TypedTables.Table`, 
-`Vector{<:RDWaveform}`. **For `AbstractArray{<:RealQuantity}` It is assumed 
-that the last axis of the provided array corresponds to the event number 
-index**.
-
-# Example 
+# Example
 
 ```julia
-julia> using HDF5
-julia> h5ds = h5open("path/to/lhf/file")
-julia> lhf = LHDataStore(h5ds)
+julia> lhf = lh5open("path/to/lh5/file", "cw")
 julia> lhf["raw"]
 [...]
 julia> using Unitful
@@ -726,11 +717,13 @@ function create_entry(parent::LHDataStore, name::AbstractString, data;
 end
 
 """
-    lh5open(filename::AbstractString, access::AbstractString = "r")
+    lh5open(filename::AbstractString, access::AbstractString = "r"; usechunks::Bool = false)
 
-Open a LEGEND HDF5 file and return an `LHDataStore` object.
+Open a LEGEND HDF5 file and return an [`LHDataStore`](@ref) object.
 
-LEGEND HDF5 files typically use the file extention ".lh5".
+With `usechunks = true`, newly written datasets are chunked and can be
+extended with `append!`. LEGEND HDF5 files typically use the file extension
+".lh5".
 """
 function lh5open(filename::AbstractString, access::AbstractString = "r"; 
     usechunks::Bool = false)
@@ -740,11 +733,11 @@ end
 export lh5open
 
 """
-    lh5open(f, filename::AbstractString, access::AbstractString = "r")
+    lh5open(f, filename::AbstractString, access::AbstractString = "r"; kwargs...)
 
-Return f(lh5open(f, filename, access)).
-
-Opens and closes the LEGEND HDF5 file `filename` automatically.
+Open the LEGEND HDF5 file `filename`, apply `f` to the resulting
+[`LHDataStore`](@ref) and close the file afterwards, returning the result
+of `f`.
 """
 function lh5open(f::Function, filename::AbstractString, 
     access::AbstractString = "r"; kwargs...)
@@ -758,8 +751,8 @@ function lh5open(f::Function, filename::AbstractString,
 end
 
 """
-    add_entries!(lhd::LHDataStore, i::AbstractString, src::TypedTable.Table, 
-        dest::TypedTable.Table=LH5Array(lhd.data_store[i]))
+    add_entries!(lhd::LHDataStore, i::AbstractString, src::TypedTables.Table,
+        dest::TypedTables.Table=LH5Array(lhd.data_store[i]))
 
 extend the Table `dest` at `lhd[i]` with columns from `src`.
 """
@@ -775,7 +768,7 @@ function add_entries!(lhd::LHDataStore, i::AbstractString,
 end
 
 """
-    add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple, 
+    add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
         dest::NamedTuple=LH5Array(lhd.data_store[i]))
 
 extend the NamedTuple `dest` at `lhd[i]` with elements from `src`.
