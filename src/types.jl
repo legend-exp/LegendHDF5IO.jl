@@ -70,7 +70,10 @@ end
 return a `LH5Array` with dimensions equal to that of `ds` and element type 
 equal to `eltype(ds) * u`
 """
-LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray}) = begin
+LH5Array(ds::HDF5.Dataset, DT::Type{<:AbstractArray}) = begin
+    N_expected = _fixed_ndims(DT)
+    isnothing(N_expected) || N_expected == _ndims(ds) || throw(ArgumentError(
+        "Dataset has $(_ndims(ds)) dimensions but expected $N_expected from datatype"))
     u = getunits(ds)
     ET = (u == NoUnits) ? eltype(ds) : typeof(eltype(ds)(0) * u)
     LH5Array{ET}(ds)
@@ -164,12 +167,7 @@ return a `Histogram`.
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:Histogram{<:RealQuantity}}) = begin
     T = (:binning, :weights, :isdensity)
-    nt = LH5Array(ds, NamedTuple{T})
-    nt = (
-        binning=nt.binning,
-        weights=Array(nt.weights),
-        isdensity=nt.isdensity
-    )
+    nt = _materialize(LH5Array(ds, NamedTuple{T}))
     _nt_to_histogram(nt)
 end
 """
@@ -189,11 +187,15 @@ LH5Array(ds::HDF5.Dataset, ::Type{<:Symbol}) = Symbol(read(ds))
 
 return an in-memory array of `SVector`s.
 """
-LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:StaticVector}}) = begin
+LH5Array(ds::HDF5.Dataset, AT::Type{<:AbstractArray{<:StaticVector}}) = begin
     data = getcontent(ds)
     u = getunits(ds)
     L = size(data, 1)
-    nestedview(u == NoUnits ? data : data * u, SVector{L})
+    L_expected = _inner_staticvector_length(AT)
+    isnothing(L_expected) || L_expected == L || throw(ErrorException(
+        "Trying to read array of static vectors of length $L_expected, but inner dimension of data has length $L"))
+    qdata = u == NoUnits ? data : data * u
+    reinterpret(reshape, SVector{L, eltype(qdata)}, qdata)
 end
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:Tuple})
@@ -208,7 +210,9 @@ LH5Array(ds::HDF5.Dataset, ::Type{<:Tuple}) =
 return an Array of NTuples
 """
 LH5Array(ds::HDF5.Dataset, AT::Type{<:AbstractArray{<:NTuple}}) = begin
-    data = read(ds)
+    raw = read(ds)
+    u = getunits(ds)
+    data = u == NoUnits ? raw : raw * u
     L = size(data, 1)
     L_expected = _inner_ntuple_length(AT)
     isnothing(L_expected) || L_expected == L || throw(ErrorException(
@@ -547,6 +551,22 @@ Base.copyto!(dest::Array, src::LH5Array) = begin
     copyto!(dest, src.file, indices...)
 end
 
+# Deep conversion of lazily read data into in-memory objects:
+
+_materialize(x) = x
+_materialize(A::LH5Array{T, N}) where {T, N} = A[ntuple(_ -> Colon(), Val(N))...]
+_materialize(A::LH5VoV) = VectorOfVectors(_materialize(A.data), copy(A.elem_ptr))
+_materialize(A::LH5AoSA{T, M}) where {T, M} =
+    ArrayOfSimilarArrays{T, M}(_materialize(A.data))
+_materialize(x::NamedTuple) = map(_materialize, x)
+_materialize(tbl::Table) = Table(map(_materialize, Tables.columns(tbl)))
+_materialize(A::ArrayOfRDWaveforms) =
+    ArrayOfRDWaveforms((_materialize(A.time), _materialize(A.signal)))
+_materialize(A::VectorOfEncodedArrays{T}) where {T} =
+    VectorOfEncodedArrays{T}(A.codec, A.innersizes, _materialize(A.encoded))
+_materialize(A::VectorOfEncodedSimilarArrays{T}) where {T} =
+    VectorOfEncodedSimilarArrays{T}(A.codec, A.innersize, _materialize(A.encoded))
+
 @inline _ustrip(x::AbstractArray{T}) where T<:Real = x
 @inline _ustrip(x::AbstractArray{T}) where T<:Quantity = 
     reinterpret(Unitful.numtype(T), x) 
@@ -821,9 +841,9 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
-# write ArrayOfSimilarArrays{<:RealQuantity}
+# write AbstractArrayOfSimilarArrays{<:RealQuantity}
 function create_entry(parent::LHDataStore, name::AbstractString,
-    data::ArrayOfSimilarArrays{T}; kwargs...) where {T<:RealQuantity}
+    data::AbstractArrayOfSimilarArrays{T}; kwargs...) where {T<:RealQuantity}
 
     create_entry(parent, name, flatview(data); kwargs...)
     setdatatype!(parent.data_store[name], typeof(data))
