@@ -36,23 +36,3 @@ function from_table(tbl, ::Type{<:AbstractVector{<:RDWaveform}})
         tbl.values
     ))
 end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::AbstractVector{<:RDWaveform},
-    fulldatatype::DataType = typeof(x)
-)
-    fulldatatype == typeof(x) || throw(ArgumentError(
-        "Custom datatype not supported when writing waveforms"))
-    writedata(output, name, to_table(x))
-end
-
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractVector{<:RDWaveform}}
-)
-    tbl = readdata(input, name, TypedTables.Table{<:NamedTuple{(:t0, :dt, :values)}})
-    from_table(tbl, AbstractVector{<:RDWaveform})
-end
