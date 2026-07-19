@@ -243,6 +243,41 @@ using Unitful
             end
         end
     end
+    @testset verbose=true "compressed writing" begin
+        mktempdir(pwd()) do tmp
+            for mode in (:zstd, :deflate)
+                path = joinpath(tmp, "tmp_$(mode).lh5")
+                lh5open(path, "cw"; compress=mode) do lhd
+                    tbl = Table(
+                        e = rand(Float32, 100),
+                        wf = VectorOfSimilarVectors(rand(UInt16, 50, 100)),
+                    )
+                    lhd["t"] = tbl
+                    append!(lhd["t"], tbl)
+                    @test lhd["t"][:] == vcat(tbl, tbl)
+                    filters = HDF5.get_create_properties(lhd.data_store["t/wf"]).filters
+                    @test length(filters) > 0
+                end
+            end
+            @test_throws ArgumentError lh5open(joinpath(tmp, "x.lh5"), "cw", compress=:lzf)
+            # compressed chunks are capped, so a partial read decompresses little more than it needs:
+            x = rand(Float32, 2^20)
+            m = rand(UInt16, 50, 2^16)
+            lh5open(joinpath(tmp, "cap.lh5"), "cw"; compress = :zstd) do lhd
+                lhd["x"] = x
+                lhd["m"] = m
+                @test HDF5.get_create_properties(lhd.data_store["x"]).chunk == (2^18,)
+                @test HDF5.get_create_properties(lhd.data_store["m"]).chunk == (50, 10485)
+                @test lhd["x"][2^18 - 1:2^18 + 1] == x[2^18 - 1:2^18 + 1]
+                @test lhd["m"][:, 10485:10486] == m[:, 10485:10486]
+            end
+            # without compression the first write still defines the chunk:
+            lh5open(joinpath(tmp, "nocap.lh5"), "cw"; usechunks = true) do lhd
+                lhd["x"] = x
+                @test HDF5.get_create_properties(lhd.data_store["x"]).chunk == (2^20,)
+            end
+        end
+    end
     @testset verbose=true "test append functionality" begin
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
