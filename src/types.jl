@@ -430,7 +430,7 @@ may also be e.g. an `HDF5.Group`) following the LEGEND data format, as in
 Constructor:
 
 ```julia
-LHDataStore(h5ds::HDF5.H5DataStore, usechunks::Bool)
+LHDataStore(h5ds::HDF5.H5DataStore, usechunks::Bool, compress::Symbol = :none)
 ```
 
 To read from or write to ".lh5" files directly (without using `HDF5.h5open`
@@ -440,7 +440,8 @@ first), use [`lh5open`](@ref).
 applied to `lh.data_store[s]`, so arrays are wrapped lazily. `setindex!`
 creates and writes `HDF5.Group`s and `HDF5.Dataset`s. With `usechunks = true`
 datasets are created chunked and extensible, so they can later be extended
-with `append!`; the chunk size is taken from the first array written. Supported
+with `append!`; the chunk size is taken from the first array written. With
+`compress` set to `:zstd` or `:deflate`, datasets are chunked and compressed. Supported
 value types include `RealQuantity` and arrays thereof, `Bool`, `String`,
 `Symbol`, `Enum`s, (arrays of) `NTuple`s and `StaticVector`s,
 `ArraysOfSimilarArrays`, `VectorOfVectors`, encoded arrays, `NamedTuple`s,
@@ -462,7 +463,24 @@ julia> lhf["new"] = x
 mutable struct LHDataStore <: AbstractDict{String,Any}
     data_store::HDF5.H5DataStore
     usechunks::Bool
+    compress::Symbol
 end
+
+LHDataStore(data_store::HDF5.H5DataStore, usechunks::Bool) =
+    LHDataStore(data_store, usechunks, :none)
+
+_compress_mode(compress::Bool) = compress ? :zstd : :none
+function _compress_mode(compress::Symbol)
+    compress === :gzip && return :deflate
+    compress in (:none, :zstd, :deflate) || throw(ArgumentError(
+        "Unsupported compression mode :$compress, expected :zstd, :deflate or :gzip"))
+    compress
+end
+
+_dataset_filters(compress::Symbol) =
+    compress === :none ? HDF5.Filters.Filter[] :
+    compress === :zstd ? HDF5.Filters.Filter[H5Zzstd.ZstdFilter(3)] :
+    HDF5.Filters.Filter[HDF5.Filters.Shuffle(), HDF5.Filters.Deflate(3)]
 
 @deprecate LHDataStore(f::AbstractString, access::AbstractString = "r") lh5open(f, access)
 @deprecate LHDataStore(f::Function, s::AbstractString, access::AbstractString = "r") lh5open(f, s, access)
@@ -504,7 +522,7 @@ Base.show(io::IO, m::MIME"text/plain", lh::LHDataStore) = HDF5.show_tree(io, lh.
 Base.show(io::IO, lh::LHDataStore) = show(io, MIME"text/plain"(), lh)
 
 function Base.setindex!(lh::LHDataStore, v, i::AbstractString)
-    create_entry(lh, i, v, usechunks=lh.usechunks)
+    create_entry(lh, i, v, usechunks=lh.usechunks, compress=lh.compress)
     nothing
 end
 
@@ -578,20 +596,23 @@ end
 
 # write AbstractArray{<:Real}
 function create_entry(parent::LHDataStore, name::AbstractString,
-    data::AbstractArray{T}; usechunks::Bool=false) where {T<:Real}
+    data::AbstractArray{T}; usechunks::Bool=false, compress::Symbol=:none
+) where {T<:Real}
 
     dtype = HDF5.datatype(T)
-    ds = if !usechunks
+    ds = if !usechunks && compress === :none
         HDF5.create_dataset(parent.data_store, name, dtype, size(data))
     else
-        # The size of the first written array informs the chunk size:
+        # Compression requires a chunked dataset. The size of the first
+        # written array informs the chunk size:
         data_size = size(data)
         sz_inner, sz_outer = data_size[begin:end-1], data_size[end]
         sz_outer > 0 || throw(ArgumentError(
             "Cannot infer a chunk size for \"$name\" from an empty array"))
         dspace = (data_size, (sz_inner..., -1))
         chunk = (sz_inner..., sz_outer)
-        HDF5.create_dataset(parent.data_store, name, dtype, dspace; chunk=chunk)
+        HDF5.create_dataset(parent.data_store, name, dtype, dspace;
+            chunk=chunk, filters=_dataset_filters(compress))
     end
     try
         HDF5.write_dataset(ds, dtype, Array(data))
@@ -783,18 +804,21 @@ function create_entry(parent::LHDataStore, name::AbstractString, data;
 end
 
 """
-    lh5open(filename::AbstractString, access::AbstractString = "r"; usechunks::Bool = false)
+    lh5open(filename::AbstractString, access::AbstractString = "r";
+        usechunks::Bool = false, compress = false)
 
 Open a LEGEND HDF5 file and return an [`LHDataStore`](@ref) object.
 
 With `usechunks = true`, newly written datasets are chunked and can be
-extended with `append!`. LEGEND HDF5 files typically use the file extension
-".lh5".
+extended with `append!`. `compress` selects dataset compression: `true` or
+`:zstd` for Zstandard, `:deflate` (alias `:gzip`) for shuffle plus deflate;
+compressed datasets are always chunked. LEGEND HDF5 files typically use the
+file extension ".lh5".
 """
-function lh5open(filename::AbstractString, access::AbstractString = "r"; 
-    usechunks::Bool = false)
+function lh5open(filename::AbstractString, access::AbstractString = "r";
+    usechunks::Bool = false, compress::Union{Bool,Symbol} = false)
 
-    LHDataStore(HDF5.h5open(filename, access), usechunks)
+    LHDataStore(HDF5.h5open(filename, access), usechunks, _compress_mode(compress))
 end
 export lh5open
 
