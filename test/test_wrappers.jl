@@ -89,6 +89,17 @@ using Unitful
                     svu = [SVector(1.0, 2.0)u"mm", SVector(3.0, 4.0)u"mm"]
                     @test setindex!(lhd, svu, "svu") |> isnothing
                     @test lhd["svu"] == svu
+                    # LegendHDF5IO 0.1 stored them through its vector-of-vectors writer, as a group
+                    # whose flattened data is already the matrix of components:
+                    for (name, data, u) in (("sv_v01", sv, NoUnits), ("svu_v01", svu, u"mm"))
+                        lhd["$name/flattened_data"] = ustrip.(u, reduce(hcat, data))
+                        lhd["$name/cumulative_length"] = cumsum(length.(data))
+                        grp = lhd.data_store[name]
+                        HDF5.attributes(grp)["datatype"] = "array<1>{fixedsize_array<1>{real}}"
+                        u == NoUnits || (HDF5.attributes(grp["flattened_data"])["units"] = string(u))
+                        close(grp)
+                        @test lhd[name] == data
+                    end
                 end
                 @testset "IO of Histogram" begin
                     h = fit(

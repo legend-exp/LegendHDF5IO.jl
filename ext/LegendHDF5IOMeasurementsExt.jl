@@ -3,8 +3,6 @@
 module LegendHDF5IOMeasurementsExt
 
 using LegendHDF5IO
-using LegendDataTypes
-using LegendDataTypes: readdata, writedata
 using Measurements
 using HDF5
 using Unitful
@@ -16,23 +14,6 @@ end
 const MeasurementLike = Union{Measurement, Quantity{<:Measurement}}
 
 LegendHDF5IO.datatype_to_string(::Type{<:MeasurementLike}) = "measurement"
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::Union{MeasurementLike, AbstractArray{<:MeasurementLike}},
-    fulldatatype::DataType = typeof(x)
-)
-    nt::NamedTuple = (val = Measurements.value.(x), err = Measurements.uncertainty.(x))
-    writedata(output, name, nt, fulldatatype)
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    ::Type{<:Union{MeasurementLike, AbstractArray{<:MeasurementLike}}}
-)
-    nt = readdata(input, name, NamedTuple{(:val, :err)})
-    measurement.(nt.val, nt.err)
-end
 
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:Measurement})
