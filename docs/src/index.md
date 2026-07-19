@@ -98,6 +98,32 @@ read with [`Geant4HDF5Input`](@ref):
 hits = open(read, "simulation.hdf5", Geant4HDF5Input)
 ```
 
+## Supporting custom types
+
+Additional types can be supported by registering an LH5 datatype name and
+defining a reader and a writer:
+
+```julia
+struct ChannelNo
+    no::Int
+end
+
+LegendHDF5IO.register_datatype!("channelno", ChannelNo)
+
+LegendHDF5IO.LH5Array(ds::HDF5.Dataset, ::Type{<:ChannelNo}) =
+    ChannelNo(read(ds))
+
+function LegendHDF5IO.create_entry(parent::LHDataStore, name::AbstractString,
+    x::ChannelNo; kwargs...)
+    parent.data_store[name] = x.no
+    LegendHDF5IO.setdatatype!(parent.data_store[name], ChannelNo)
+    nothing
+end
+```
+
+`Enum` types only need registration:
+`LegendHDF5IO.register_datatype!(MyEnum)`.
+
 ## The `readdata`/`writedata` API
 
 The functions `LegendDataTypes.readdata` and `LegendDataTypes.writedata`

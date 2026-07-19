@@ -8,7 +8,7 @@ using HDF5
 using Unitful
 
 function __init__()
-    LegendHDF5IO._datatype_dict["measurement"] = Measurement
+    LegendHDF5IO.register_datatype!("measurement", Measurement)
 end
 
 const MeasurementLike = Union{Measurement, Quantity{<:Measurement}}
