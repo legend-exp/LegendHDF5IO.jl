@@ -35,6 +35,9 @@ _ndims(::Type{<:AbstractArray{<:Any,N}}) where {N} = N
 # Extract type parameters via dispatch, returning nothing where the given
 # type does not determine them:
 
+_fixed_ndims(::Type{<:AbstractArray{<:Any,N}}) where {N} = @isdefined(N) ? N : nothing
+_fixed_ndims(::Type) = nothing
+
 _inner_ntuple_length(::Type{<:AbstractArray{<:NTuple{L,Any}}}) where {L} = L
 _inner_ntuple_length(::Type) = nothing
 
@@ -43,11 +46,6 @@ _inner_staticvector_length(::Type) = nothing
 
 _enum_eltype(::Type{<:AbstractArray{E}}) where {E<:Enum} =
     @isdefined(E) ? E : throw(ArgumentError("Enum element type not determined by array type"))
-
-_encoded_ndims(::Type{<:VectorOfEncodedArrays{T,N} where T}) where {N} = N
-_encoded_ndims(::Type) = nothing
-
-_table_names(::Type{<:TypedTables.Table{<:NamedTuple{names}}}) where {names} = names
 
 _namedtuple_type(members::AbstractVector{<:AbstractString}) = NamedTuple{(Symbol.(members)...,)}
 
@@ -287,106 +285,50 @@ function getcontent(dset::HDF5.Dataset, idxs::Tuple = axes(dset))
 end
 
 
-function LegendDataTypes.readdata(input::Union{HDF5.Dataset, HDF5.H5DataStore}, name::AbstractString)
-    datatype = getdatatype(input[name])
-    readdata(input, name, datatype)
+"""
+    readdata(input::Union{HDF5.Dataset, HDF5.H5DataStore}, name::AbstractString)
+    readdata(input, name, datatype::Type)
+
+Read the value stored under `name` from `input`, eagerly.
+
+Reads via [`LH5Array`](@ref) and materializes the result in memory. The
+value type is normally determined by the "datatype" attribute; the
+three-argument form overrides it.
+"""
+function LegendDataTypes.readdata(
+    input::Union{HDF5.Dataset, HDF5.H5DataStore}, name::AbstractString
+)
+    _materialize(LH5Array(input[name]))
+end
+
+function LegendDataTypes.readdata(
+    input::Union{HDF5.Dataset, HDF5.H5DataStore}, name::AbstractString,
+    DT::Type
+)
+    _materialize(LH5Array(input[name], DT))
 end
 
 
+"""
+    writedata(output::HDF5.H5DataStore, name::AbstractString, x,
+        fulldatatype::DataType = typeof(x))
+
+Write the value `x` under `name` to `output`, via `create_entry`.
+
+Passing `fulldatatype` overrides the "datatype" attribute written for `x`;
+passing `Nothing` suppresses it.
+"""
 function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::Union{T,AbstractArray{T}},
+    output::HDF5.H5DataStore, name::AbstractString, x,
     fulldatatype::DataType = typeof(x)
-) where {T<:RealQuantity}
-    units = unit(eltype(x))
-    if units == NoUnits
-        output[name] = x
-    else
-        output[name] = ustrip.(x)
-        setunits!(output[name], units)
-    end
-    if fulldatatype != Nothing
+)
+    create_entry(LHDataStore(output, false), name, x)
+    if fulldatatype == Nothing
+        hasattribute(output[name], :datatype) && HDF5.delete_attribute(output[name], "datatype")
+    elseif fulldatatype != typeof(x)
         setdatatype!(output[name], fulldatatype)
     end
     nothing
-end
-
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    T::Type{<:Union{RealQuantity,AbstractArray}}
-)
-    dset = input[name]
-    _ndims(dset) == _ndims(T) || throw(ArgumentError("Dataset has $(_ndims(dset)) dimensions but expected $(_ndims(T)) from datatype"))
-    data = getcontent(dset)
-    units = getunits(dset)
-    if units == NoUnits
-        data
-    else
-        data * units
-    end
-end
-
-
-# Write Bool arrays as arrays of UInt8 for h5py compatibility (see
-# https://github.com/h5py/h5py/issues/641). Issue may be fixed in recent
-# versions of h5py (see https://github.com/h5py/h5py/pull/821).
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::Union{Bool,AbstractArray{Bool}},
-    fulldatatype::DataType = typeof(x)
-)
-    data = UInt8.(x)
-    output[name] = data
-    if fulldatatype != Nothing
-        setdatatype!(output[name], fulldatatype)
-    end
-    nothing
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    ::Type{<:Union{Bool,AbstractArray{<:Bool}}}
-)
-    dset = input[name]
-    units = getunits(dset)
-    units == NoUnits || throw(ArgumentError("Can't interpret dataset with units as Bool values"))
-    data = getcontent(dset)
-    # Broadcast will return BitArray, map would return Array{UInt8}:
-    (x -> x > 0).(data)
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::AbstractArray{<:Enum{T}},
-    fulldatatype::DataType = typeof(x)
-) where {T}
-    writedata(output, name, reinterpret(T, x), fulldatatype)
-end
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::Enum{T},
-    fulldatatype::DataType = typeof(x)
-) where {T}
-    writedata(output, name, T(x), fulldatatype)
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    ET::Type{<:Enum}
-)
-    ET(readdata(input, name, RealQuantity))
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractArray{<:Enum,N}}
-) where N
-    ET = _enum_eltype(AT)
-    data = readdata(input, name, AbstractArray{RealQuantity,N})
-    ET.(data)
 end
 
 
@@ -402,339 +344,4 @@ function _flatview_to_array_of_ntuple(A::AbstractArray{T,N}, TPL::Type{NTuple{L,
     size_A[1] == L || throw(DimensionMismatch("Length $L of NTuple type does not match first dimension of array of size $size_A"))
     tmp = reshape(reinterpret(TPL, A), sz_out...)
     convert(Array{NTuple{L,T},N_out}, tmp)
-end
-
-_array_of_ntuple_innersize(A::AbstractArray{<:NTuple{L,Any}}) where {L} = L
-
-function _array_of_ntuple_innerconv(::Type{T}, A::AbstractArray{<:NTuple{L,Any},N}) where {T,N,L}
-    convert(Array{NTuple{L,T},N}, A)
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::NTuple{L,Any},
-    fulldatatype::DataType = typeof(x)
-) where {L}
-    U = eltype(typeof(x))
-    isconcretetype(U) || throw(ArgumentError("Only homogeneous tuples are supported"))
-    writedata(output, name, collect(U, x), fulldatatype)
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    ::Type{<:Tuple}
-)
-    (readdata(input, name, AbstractArray{<:RealQuantity,1})...,)
-end
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::AbstractArray{T,N},
-    fulldatatype::DataType = typeof(x)
-) where {L,T<:NTuple{L,RealQuantity},N}
-    writedata(output, name, _flatview_of_array_of_ntuple(x), fulldatatype)
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractArray{<:NTuple}}
-)
-    N = length(size(input[name]))
-    data = readdata(input, name, AbstractArray{RealQuantity,N})
-    L = size(data, 1)
-    L_expected = _inner_ntuple_length(AT)
-    isnothing(L_expected) || L_expected == L || throw(ErrorException("Trying to read array of NTuples of length $L_expected, but inner dimension of data has length $L"))
-    _flatview_to_array_of_ntuple(data, NTuple{L,eltype(data)})
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::AbstractArray{T,N},
-    fulldatatype::DataType = typeof(x)
-) where {TPL,T<:StaticArray{TPL,<:RealQuantity},N}
-    writedata(output, name, flatview(x), fulldatatype)
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractArray{<:StaticVector}}
-)
-    N = length(size(input[name]))
-    data = readdata(input, name, AbstractArray{RealQuantity,N})
-    L = size(data, 1)
-    L_expected = _inner_staticvector_length(AT)
-    isnothing(L_expected) || L_expected == L || throw(ErrorException("Trying to read array of static vectors of length $L_expected, but inner dimension of data has length $L"))
-    nestedview(data, SVector{L})
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::AbstractString,
-    fulldatatype::DataType = typeof(x)
-)
-    output[name] = x
-    if fulldatatype != Nothing
-        setdatatype!(output[name], fulldatatype)
-    end
-    nothing
-end
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::AbstractArray{<:AbstractString},
-    fulldatatype::DataType = typeof(x)
-)
-    output[name] = convert(Array{String}, x)
-    if fulldatatype != Nothing
-        setdatatype!(output[name], fulldatatype)
-    end
-    nothing
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    ::Type{<:String}
-)
-    dset = input[name]
-    read(dset)
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::Symbol,
-    fulldatatype::DataType = typeof(x)
-)
-    writedata(output, name, String(x), fulldatatype)
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    ::Type{<:Symbol}
-)
-    Symbol(readdata(input, name, String))
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::AbstractArray{<:AbstractArray{T,M},N},
-    fulldatatype::DataType = typeof(x)
-) where {T,M,N}
-    N == 1 || throw(ArgumentError("Output of multi-dimensional arrays of arrays to HDF5 is not supported"))
-    # ToDo: Support vectors of multi-dimensional arrays
-    M ==1 || throw(ArgumentError("Output of vectors of multi-dimensional arrays to HDF5 is not supported"))
-    writedata(output, "$(name)/flattened_data", flatview(x))
-    writedata(output, "$(name)/cumulative_length", _cumulative_length(x))
-    setdatatype!(output[name], fulldatatype)
-    nothing
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractArray{<:AbstractArray}}
-)
-    data = readdata(input, "$name/flattened_data")
-    clen = readdata(input, "$name/cumulative_length")
-    VectorOfVectors(data, _element_ptrs(clen))
-end
-
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::EncodedArray{T,1,C},
-    fulldatatype::DataType = typeof(x)
-) where {T,C}
-    writedata(output, "$name/encoded_data", x.encoded)
-    writedata(output, "$name/size", x.size)
-    writedata(output, "$name/sample_data", zero(T))
-
-    dset = output[name]
-    codec_name = LegendDataTypes.array_codecs[C]
-    setattribute!(dset, :codec, String(codec_name))
-    write_to_properties!(setattribute!, dset, x.codec)
-
-    setdatatype!(dset, fulldatatype)
-    nothing
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:EncodedArray}
-)
-    data = readdata(input, "$name/encoded_data")
-    sz = readdata(input, "$name/size")
-    innersize = sz isa Tuple ? Int.(sz) : (Int(sz),)
-
-    dset = input[name]
-    codec_name = Symbol(getattribute(dset, :codec, String))
-    C = LegendDataTypes.array_codecs[codec_name]
-    codec = read_from_properties(getattribute, dset, C)
-
-    T = _encoded_eltype(input, name)
-
-    EncodedArray{T}(codec, innersize, data)
-end
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::VectorOfEncodedArrays{T,1,C},
-    fulldatatype::DataType = typeof(x)
-) where {T,C}
-    codec = x.codec
-
-    writedata(output, "$name/encoded_data", x.encoded)
-    writedata(output, "$name/decoded_size", x.innersizes)
-    writedata(output, "$name/sample_data", zero(T))
-
-    dset = output[name]
-
-    codec_name = LegendDataTypes.array_codecs[C]
-    setattribute!(dset, :codec, String(codec_name))
-    write_to_properties!(setattribute!, dset, codec)
-
-    setdatatype!(dset, fulldatatype)
-    nothing
-end
-
-function _encoded_eltype(input::HDF5.H5DataStore, name::AbstractString)
-    haskey(input, "$name/sample_data") || return Int32
-    ds = input["$name/sample_data"]
-    try
-        eltype(ds)
-    finally
-        close(ds)
-    end
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:VectorOfEncodedArrays}
-)
-    data_vec = readdata(input, "$name/encoded_data")
-    size_vec_in = readdata(input, "$name/decoded_size")
-    N = _array_of_ntuple_innersize(size_vec_in)
-    size_vec = _array_of_ntuple_innerconv(Int, size_vec_in)
-
-    N_expected = _encoded_ndims(AT)
-    isnothing(N_expected) || N_expected == N || throw(ErrorException("Trying to read a vector of encoded arrays with $N_expected dimensions, but data indicates $N dimensions"))
-
-    dset = input[name]
-
-    codec_name = Symbol(getattribute(dset, :codec, String))
-    C = LegendDataTypes.array_codecs[codec_name]
-    codec = read_from_properties(getattribute, dset, C)
-
-    T = _encoded_eltype(input, name)
-
-    return VectorOfEncodedArrays{T}(codec, size_vec, data_vec)
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::VectorOfEncodedSimilarArrays{T,1,C},
-    fulldatatype::DataType = typeof(x)
-) where {T,C}
-    codec = x.codec
-
-    # Limit to vector for encoded vectors for now:
-    innerlen = only(x.innersize)
-
-    writedata(output, "$name/encoded_data", x.encoded)
-    writedata(output, "$name/decoded_size", innerlen)
-    writedata(output, "$name/sample_data", zero(T))
-
-    dset = output[name]
-
-    codec_name = LegendDataTypes.array_codecs[C]
-    setattribute!(dset, :codec, String(codec_name))
-    write_to_properties!(setattribute!, dset, codec)
-
-    setdatatype!(dset, fulldatatype)
-    nothing
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:VectorOfEncodedSimilarArrays}
-)
-    data_vec = readdata(input, "$name/encoded_data")
-
-    # Limit to vector for encoded vectors for now:
-    innerlen = readdata(input, "$name/decoded_size")
-    innerlen isa Integer || throw(ErrorException("Expected scalar integer \"decoded_size\" in \"$name\""))
-    innersz = (innerlen,)
-    N = 1
-
-    dset = input[name]
-
-    codec_name = Symbol(getattribute(dset, :codec, String))
-    C = LegendDataTypes.array_codecs[codec_name]
-    codec = read_from_properties(getattribute, dset, C)
-
-    T = _encoded_eltype(input, name)
-
-    VectorOfEncodedSimilarArrays{T}(codec, innersz, data_vec)
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::AbstractArrayOfSimilarArrays{T,M,N},
-    fulldatatype::DataType = typeof(x)
-) where {T,M,N}
-    writedata(output, name, flatview(x), fulldatatype)
-    nothing
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:AbstractArrayOfSimilarArrays{T,M,N} where T}
-) where {M,N}
-    data = readdata(input, name, AbstractArray{<:RealQuantity, M + N})
-    nestedview(data, Val(M))
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::NamedTuple,
-    fulldatatype::DataType = typeof(x)
-)
-    for k in keys(x)
-        y = x[k]
-        writedata(output, "$name/$k", y, typeof(y))
-    end
-    setdatatype!(output[name], fulldatatype)
-    nothing
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:NamedTuple{syms}}
-) where {syms}
-    NamedTuple{syms}(map(k -> readdata(input, "$name/$k"), syms))
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::Any,
-    fulldatatype::DataType = typeof(x)
-)
-    Tables.istable(x) || throw(ArgumentError("Value to write, of type $(typeof(x)), is not a table"))
-    cols = Tables.columns(Table(x))
-    writedata(output, name, cols, fulldatatype)
-end
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:TypedTables.Table}
-)
-    TypedTables.Table(readdata(input, name, NamedTuple{_table_names(AT)}))
 end

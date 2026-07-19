@@ -47,31 +47,11 @@ function _histogram_to_nt(h::StatsBase.Histogram)
     axs_sym = Symbol.(["axis_$(i)" for i in axs_idxs])
     axs = [(
         binedges = _edge_to_nt(h.edges[i]),
-        closedleft = h.closed == :left 
+        closedleft = h.closed == :left
     ) for i in axs_idxs]
     return (
         binning = NamedTuple{tuple(axs_sym...)}(axs),
         weights = h.weights,
         isdensity = h.isdensity
     )
-end
-
-
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString,
-    x::Histogram,
-    fulldatatype::DataType = typeof(x)
-)
-    fulldatatype == typeof(x) || throw(ArgumentError(
-        "Custom datatype not supported when writing histograms"))
-    writedata(output, name, _histogram_to_nt(x))
-end
-
-
-function LegendDataTypes.readdata(
-    input::HDF5.H5DataStore, name::AbstractString,
-    AT::Type{<:Histogram}
-)
-    nt = readdata(input, name, NamedTuple{(:binning,:weights,:isdensity)})
-    _nt_to_histogram(nt)
 end
