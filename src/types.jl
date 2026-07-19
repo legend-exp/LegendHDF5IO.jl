@@ -285,8 +285,10 @@ Base.getindex(lh::LH5AoSA{T, M}, idxs::LHIndexType...) where {T, M} = begin
     ArrayOfSimilarArrays{T, M}(lh.data[indices...])
 end
 
-# Scattered reads along the last (event) dimension, coalescing runs of
-# consecutive indices into a single HDF5 hyperslab read each:
+# Scattered reads along the last (event) dimension. Depending on index
+# density, dataset rank and layout they map to a single bounding-range read,
+# a single read with a scattered dataspace selection, or one hyperslab read
+# per contiguous index run:
 
 function _contiguous_runs(idxs::AbstractVector{<:Integer})
     runs = Vector{UnitRange{Int}}()
@@ -319,11 +321,25 @@ function _getindex_scattered_lastdim(
     span = hi - lo + 1
     row_bytes = sizeof(T) * prod(Base.front(size(lh)))
     # For small or densely covered index spans a single bounding read is
-    # cheaper than one read per index run:
+    # cheaper than any scattered read:
     if span * row_bytes <= _scatter_bulk_max_bytes || 4 * length(ilast) >= span
         bulk = lh[front..., lo:hi]
         return bulk[ntuple(_ -> :, ndims(bulk) - 1)..., ilast .- (lo - 1)]
     end
+    # Point selections beat per-run reads for vectors of any layout, hyperslab
+    # unions only for contiguous-layout datasets (libhdf5 maps large irregular
+    # selections onto chunks slowly, while sorted per-run reads make good use
+    # of the chunk cache):
+    if all(i -> i isa Colon, front) && (N == 1 || _is_contiguous(lh.file))
+        return _getindex_scattered_single_read(lh, ilast)
+    end
+    _getindex_scattered_runs(lh, front, ilast)
+end
+
+# One HDF5 hyperslab read per contiguous index run:
+function _getindex_scattered_runs(
+    lh::LH5Array{T, N}, front::NTuple{M, Any}, ilast::AbstractVector{<:Integer}
+) where {T, N, M}
     runs = _contiguous_runs(ilast)
     parts = [lh[front..., r] for r in runs]
     K = ndims(first(parts))
@@ -336,6 +352,127 @@ function _getindex_scattered_lastdim(
         offset += len
     end
     out
+end
+
+function _is_contiguous(ds::HDF5.Dataset)
+    dcpl = HDF5.get_create_properties(ds)
+    try
+        dcpl.layout == :contiguous
+    finally
+        close(dcpl)
+    end
+end
+
+# HDF5.jl gained bindings for these libhdf5 functions in v0.17:
+@static if isdefined(HDF5.API, :h5s_select_elements)
+    const _h5s_select_elements = HDF5.API.h5s_select_elements
+    const _h5s_modify_select = HDF5.API.h5s_modify_select
+else
+    function _h5s_select_elements(space_id, op, num_elem, coord)
+        ret = ccall((:H5Sselect_elements, HDF5.API.libhdf5), HDF5.API.herr_t,
+            (HDF5.API.hid_t, HDF5.API.H5S_seloper_t, Csize_t, Ptr{HDF5.API.hsize_t}),
+            space_id, op, num_elem, coord)
+        ret < 0 && error("Error selecting dataspace elements")
+        nothing
+    end
+    function _h5s_modify_select(space1_id, op, space2_id)
+        ret = ccall((:H5Smodify_select, HDF5.API.libhdf5), HDF5.API.herr_t,
+            (HDF5.API.hid_t, HDF5.API.H5S_seloper_t, HDF5.API.hid_t),
+            space1_id, op, space2_id)
+        ret < 0 && error("Error modifying dataspace selection")
+        nothing
+    end
+end
+
+# A single H5Dread with a scattered dataspace selection. Requires sorted
+# indices, since HDF5 reads selections in index order:
+function _getindex_scattered_single_read(
+    lh::LH5Array{T, N}, ilast::AbstractVector{<:Integer}
+) where {T, N}
+    idxs, imap = _dedup_sorted(ilast)
+    dims = size(lh)
+    fspace = HDF5.dataspace(lh.file)
+    out = try
+        _select_scattered!(fspace, dims, idxs)
+        _read_selection(lh.file, T, fspace, (Base.front(dims)..., length(idxs)))
+    finally
+        close(fspace)
+    end
+    isnothing(imap) ? out : out[ntuple(_ -> :, N - 1)..., imap]
+end
+
+# Unique values of a sorted vector and, if there were duplicates, the
+# positions of the inputs therein:
+function _dedup_sorted(idxs::AbstractVector{<:Integer})
+    u = Int[Int(first(idxs))]
+    imap = Vector{Int}(undef, length(idxs))
+    for (k, v) in enumerate(idxs)
+        v > last(u) && push!(u, Int(v))
+        imap[k] = length(u)
+    end
+    length(u) == length(idxs) ? (u, nothing) : (u, imap)
+end
+
+function _select_scattered!(fspace::HDF5.Dataspace, dims::Dims{1}, idxs::Vector{Int})
+    coords = HDF5.API.hsize_t[i - 1 for i in idxs]
+    _h5s_select_elements(fspace, HDF5.API.H5S_SELECT_SET, length(coords), coords)
+    nothing
+end
+
+function _select_scattered!(fspace::HDF5.Dataspace, dims::Dims{N}, idxs::Vector{Int}) where {N}
+    runs = _contiguous_runs(idxs)
+    # HDF5 dimension order is the reverse of Julia's, index runs select
+    # along HDF5 dimension 1:
+    start = zeros(HDF5.API.hsize_t, N)
+    count = HDF5.API.hsize_t[i == 1 ? 0 : dims[N - i + 1] for i in 1:N]
+    _select_runs!(fspace, dims, start, count, runs, 1, length(runs), true)
+    nothing
+end
+
+# OR-ing hyperslabs into a selection one by one is quadratic in libhdf5, so
+# build sub-selections and merge them by divide and conquer (h5py PR 2603):
+function _select_runs!(fspace::HDF5.Dataspace, dims::Dims,
+    start::Vector{HDF5.API.hsize_t}, count::Vector{HDF5.API.hsize_t},
+    runs::Vector{UnitRange{Int}}, lo::Int, hi::Int, fresh::Bool
+)
+    if hi - lo < 16
+        for k in lo:hi
+            start[1] = first(runs[k]) - 1
+            count[1] = length(runs[k])
+            op = fresh && k == lo ? HDF5.API.H5S_SELECT_SET : HDF5.API.H5S_SELECT_OR
+            HDF5.API.h5s_select_hyperslab(fspace, op, start, C_NULL, count, C_NULL)
+        end
+    else
+        mid = (lo + hi) >>> 1
+        _select_runs!(fspace, dims, start, count, runs, lo, mid, fresh)
+        fs2 = HDF5.dataspace(dims)
+        try
+            _select_runs!(fs2, dims, start, count, runs, mid + 1, hi, true)
+            _h5s_modify_select(fspace, HDF5.API.H5S_SELECT_OR, fs2)
+        finally
+            close(fs2)
+        end
+    end
+    nothing
+end
+
+function _read_selection(ds::HDF5.Dataset, ::Type{T}, fspace::HDF5.Dataspace,
+    dims::Dims
+) where {T}
+    filetype = HDF5.datatype(ds)
+    memtype = HDF5.Datatype(HDF5.API.h5t_get_native_type(filetype))
+    memspace = HDF5.dataspace(dims)
+    try
+        sizeof(T) == sizeof(memtype) || throw(ArgumentError(
+            "Can't read scattered $(sizeof(memtype))-byte elements into $T"))
+        buf = Array{T}(undef, dims)
+        HDF5.API.h5d_read(ds, memtype, memspace, fspace, ds.xfer, buf)
+        buf
+    finally
+        close(memspace)
+        close(memtype)
+        close(filetype)
+    end
 end
 
 Base.getindex(lh::LH5Array{T, N},

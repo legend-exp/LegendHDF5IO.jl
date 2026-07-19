@@ -175,6 +175,48 @@ using Unitful
                 lhd["vv"] = vv
                 @test lhd["vv"][[2, 3, 4, 70]] == vv[[2, 3, 4, 70]]
             end
+
+            # sparse index patterns on contiguous-layout data trigger
+            # single-read scattered selections (point selection for vectors,
+            # hyperslab-run union for higher dimensions):
+            path2 = joinpath(tmp, "sparse.lh5")
+            lh5open(path2, "cw") do lhd
+                x = rand(Float32, 400_000)
+                lhd["x"] = x * u"keV"
+                X = lhd["x"]
+                sp = [1, 5, 6, 350_000, 399_999]
+                @test X[sp] == x[sp] * u"keV"
+                unsorted_dups = [350_000, 1, 1, 399_999, 5]
+                @test X[unsorted_dups] == x[unsorted_dups] * u"keV"
+
+                b = rand(Bool, 2^20 + 5)
+                lhd["b"] = b
+                spb = [1, 3, 4, 2^20 + 3]
+                @test lhd["b"][spb] == b[spb]
+
+                data = rand(UInt16, 700, 2000)
+                lhd["aofa"] = nestedview(data)
+                W = lhd["aofa"]
+                sp2 = [2, 3, 4, 700, 1999]
+                @test W.data[:, sp2] == data[:, sp2]
+                @test W.data[:, [1999, 2, 2, 700]] == data[:, [1999, 2, 2, 700]]
+                # non-colon front indices use per-run reads:
+                @test W.data[5, sp2] == data[5, sp2]
+            end
+
+            # on chunked datasets vectors still use point selections while
+            # higher dimensions fall back to per-run reads:
+            path3 = joinpath(tmp, "sparse_chunked.lh5")
+            lh5open(path3, "cw"; usechunks=true) do lhd
+                x = rand(Float32, 400_000)
+                data = rand(UInt16, 700, 2000)
+                lhd["x"] = x
+                lhd["aofa"] = nestedview(data)
+                sp = [1, 5, 6, 350_000, 399_999]
+                sp2 = [2, 3, 4, 700, 1999]
+                @test lhd["x"][sp] == x[sp]
+                @test lhd["aofa"].data[:, sp2] == data[:, sp2]
+            end
         end
     end
     @testset verbose=true "compressed writing" begin
