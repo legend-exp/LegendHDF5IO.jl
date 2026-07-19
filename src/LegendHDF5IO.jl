@@ -32,12 +32,13 @@ include("histogram_io.jl")
 include("types.jl")
 
 const _datatype_dict = Dict{String,Type}()
+const _datatype_names = Vector{Pair{Type,String}}()
 
 function __init__()
     scatter_bulk_max_bytes[] = @load_preference("scatter_bulk_max_bytes", 2^20)
     scatter_bulk_max_waste[] = @load_preference("scatter_bulk_max_waste", 4)
-    _datatype_dict[_sort_datatype_fields(datatype_to_string(EventType))] = EventType
-    _datatype_dict[_sort_datatype_fields(datatype_to_string(DAQType))] = DAQType
+    register_datatype!(EventType)
+    register_datatype!(DAQType)
     _datatype_dict[_sort_datatype_fields("table{t0,dt,values}")] = Vector{<:RDWaveform}
     _datatype_dict[_sort_datatype_fields("struct{binning,weights,isdensity}")] = Histogram
 end
