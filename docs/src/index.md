@@ -67,7 +67,7 @@ events themselves. The thresholds for that choice,
 raise them on filesystems with a high per-operation latency, such as
 cluster filesystems.
 
-### Appending
+### Appending and compression
 
 Open the file with `usechunks = true` to create extensible datasets, then
 grow them with `append!` (always along the last dimension):
@@ -78,6 +78,13 @@ lh5open("events.lh5", "cw", usechunks = true) do lhd
     append!(lhd["evt"], tbl)
 end
 ```
+
+The chunk size is taken from the first array written to each dataset. With
+`compress = :zstd` (or `true`) datasets are Zstandard-compressed;
+`compress = :deflate` uses shuffle plus deflate for maximum portability.
+Compressed datasets are always chunked, so they compose with `append!`, and
+their chunks are capped at 1 MiB, since a partial read decompresses whole
+chunks.
 
 ### Modifying structure
 
