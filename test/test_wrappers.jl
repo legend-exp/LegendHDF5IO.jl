@@ -219,6 +219,25 @@ using Unitful
             end
         end
     end
+    @testset verbose=true "compressed writing" begin
+        mktempdir(pwd()) do tmp
+            for mode in (:zstd, :deflate)
+                path = joinpath(tmp, "tmp_$(mode).lh5")
+                lh5open(path, "cw"; compress=mode) do lhd
+                    tbl = Table(
+                        e = rand(Float32, 100),
+                        wf = VectorOfSimilarVectors(rand(UInt16, 50, 100)),
+                    )
+                    lhd["t"] = tbl
+                    append!(lhd["t"], tbl)
+                    @test lhd["t"][:] == vcat(tbl, tbl)
+                    filters = HDF5.get_create_properties(lhd.data_store["t/wf"]).filters
+                    @test length(filters) > 0
+                end
+            end
+            @test_throws ArgumentError lh5open(joinpath(tmp, "x.lh5"), "cw", compress=:lzf)
+        end
+    end
     @testset verbose=true "test append functionality" begin
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
