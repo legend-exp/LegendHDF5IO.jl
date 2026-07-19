@@ -60,7 +60,7 @@ end
 Reading `lhd["evt"]` returns a `Table` whose columns are disk-backed; use
 `lhd["evt"][:]` or index with a range to materialize rows.
 
-### Appending
+### Appending and compression
 
 Open the file with `usechunks = true` to create extensible datasets, then
 grow them with `append!` (always along the last dimension):
@@ -71,6 +71,11 @@ lh5open("events.lh5", "cw", usechunks = true) do lhd
     append!(lhd["evt"], tbl)
 end
 ```
+
+The chunk size is taken from the first array written to each dataset. With
+`compress = :zstd` (or `true`) datasets are Zstandard-compressed;
+`compress = :deflate` uses shuffle plus deflate for maximum portability.
+Compressed datasets are always chunked, so they compose with `append!`.
 
 ### Modifying structure
 
