@@ -7,6 +7,15 @@
 
 const datatype_regexp = r"""^(([A-Za-z_]*)(<([0-9,]*)>)?)(\{(.*)\})?$"""
 
+# Enum datatypes are not built in, they are resolved via the registry:
+const _builtin_datatype_kinds = (
+    "real", "bool", "string", "symbol", "struct", "table", "ntuple", "array",
+    "encoded_array", "fixedsize_array", "array_of_equalsized_arrays",
+    "array_of_encoded_arrays", "array_of_encoded_equalsized_arrays", "histogram",
+)
+
+_is_builtin_datatype(s::AbstractString) = match(datatype_regexp, s)[2] in _builtin_datatype_kinds
+
 function _eldatatype_from_string(s::Union{Nothing,AbstractString})
     if isnothing(s) || isempty(s)
         RealQuantity
@@ -60,13 +69,15 @@ function datatype_from_string(s::AbstractString)
         String
     elseif s == "symbol"
         Symbol
-    elseif haskey(_datatype_dict, s_sorted_fields)
-        _datatype_dict[s_sorted_fields]
+    elseif (registered = lock(() -> get(_datatype_dict, s_sorted_fields, nothing), _registry_lock)) !== nothing
+        registered
     else
         m = match(datatype_regexp, s)
         m isa Nothing && throw(ErrorException("Invalid datatype string \"$s\""))
         tp = m[2]
         content = m[6]
+        tp == "enum" || tp in _builtin_datatype_kinds || throw(ArgumentError(
+            "Unknown LH5 datatype \"$s\", load the package that registers it"))
         if tp == "struct"
             _namedtuple_type(split(content, ","; keepempty = false))
         elseif tp == "table"
@@ -75,7 +86,8 @@ function datatype_from_string(s::AbstractString)
             T = _eldatatype_from_string(content)
             (NTuple{N,<:T} where N)
         elseif tp == "enum"
-            throw(ErrorException("Enum datatype \"$s\" is not registered"))
+            throw(ErrorException("Enum datatype \"$s\" is not registered," *
+                " use LegendHDF5IO.register_datatype! to register enum types"))
         else
             dims = parse.(Int, split(m[4], ","))
             eltp = content
@@ -124,50 +136,111 @@ function _array_type(::Type{Array{T, N}}) where {T, N}
     isconcretetype(T) ? AbstractArray{T, N} : AbstractArray{<:T, N}
 end
 
+const _registry_lock = ReentrantLock()
+
+"""
+    LegendHDF5IO.register_datatype!(name::AbstractString, ::Type{T})
+    LegendHDF5IO.register_datatype!(::Type{T})
+
+Register the LH5 datatype string `name` for type `T`, for reading and
+writing. Without `name`, the canonical datatype string of `T` is used
+(e.g. for `Enum` types).
+
+Each name can only be registered for one type, and each type only under one
+name. Names consist of letters and underscores. Built-in datatype names like
+`"real"` or `"array<1>{real}"` are reserved. Conflicting registrations throw
+an `ArgumentError`, while repeating a registration has no effect.
+
+The registry is not part of the precompilation cache, so register from the
+`__init__` function of your module or package extension.
+
+To support reading and writing values of type `T`, also define
+
+```julia
+LegendHDF5IO.LH5Array(ds::HDF5.Dataset, ::Type{<:T})
+LegendHDF5IO.create_entry(parent::LHDataStore, name::AbstractString, x::T; kwargs...)
+```
+"""
+function register_datatype!(name::AbstractString, ::Type{T}) where {T}
+    key = _sort_datatype_fields(name)
+    _is_builtin_datatype(key) &&
+        throw(ArgumentError("LH5 datatype \"$name\" is built in and cannot be registered"))
+    lock(_registry_lock) do
+        registered_type = get(_datatype_dict, key, T)
+        registered_type == T ||
+            throw(ArgumentError("LH5 datatype \"$name\" is already registered for type $registered_type"))
+        i = findfirst(p -> p.first == T, _datatype_names)
+        if isnothing(i)
+            _datatype_dict[key] = T
+            push!(_datatype_names, T => name)
+        else
+            registered_name = _datatype_names[i].second
+            _sort_datatype_fields(registered_name) == key ||
+                throw(ArgumentError("Type $T is already registered as LH5 datatype \"$registered_name\""))
+        end
+    end
+    nothing
+end
+
+register_datatype!(::Type{T}) where {T} = register_datatype!(datatype_to_string(T), T)
+
 function _inner_datatype_to_string(::Type{T}) where T
     s = datatype_to_string(T)
     isempty(s) ? "" : "{$s}"
 end
 
+# A name registered for this type, or for its most specific registered
+# supertype, takes precedence over built-in naming:
+function datatype_to_string(::Type{T}) where {T}
+    name = lock(_registry_lock) do
+        matches = filter(p -> T <: p.first, _datatype_names)
+        isempty(matches) ? nothing : reduce((a, b) -> b.first <: a.first ? b : a, matches).second
+    end
+    isnothing(name) ? _datatype_to_string_impl(T) : name
+end
 
-datatype_to_string(::Type{<:RealQuantity}) = "real"
+_datatype_to_string_impl(::Type{<:RealQuantity}) = "real"
 
-datatype_to_string(::Type{Bool}) = "bool"
+_datatype_to_string_impl(::Type{Bool}) = "bool"
 
-datatype_to_string(T::Type{<:Enum{U}}) where {U} = "enum{"*join(broadcast(x -> "$(string(x))=$(U(x))", instances(T)), ",")*"}"
+_datatype_to_string_impl(T::Type{<:Enum{U}}) where {U} =
+    "enum{" * join(broadcast(x -> "$(string(x))=$(U(x))", instances(T)), ",") * "}"
 
-datatype_to_string(::Type{<:AbstractString}) = "string"
+_datatype_to_string_impl(::Type{<:AbstractString}) = "string"
 
-datatype_to_string(::Type{<:Symbol}) = "symbol"
+_datatype_to_string_impl(::Type{<:Symbol}) = "symbol"
 
-datatype_to_string(T::Type{<:NTuple{N,Any}}) where {N} = "ntuple$(_inner_datatype_to_string(eltype(T)))"
+_datatype_to_string_impl(T::Type{<:NTuple{N,Any}}) where {N} = "ntuple$(_inner_datatype_to_string(eltype(T)))"
 
-datatype_to_string(::Type{<:AbstractArray{T,N}}) where {T,N} =
+_datatype_to_string_impl(::Type{<:AbstractArray{T,N}}) where {T,N} =
     "array<$N>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:EncodedArray{T,N}}) where {T,N} =
+_datatype_to_string_impl(::Type{<:EncodedArray{T,N}}) where {T,N} =
     "encoded_array<$N>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:StaticArray{TPL,T,N}}) where {TPL,T<:RealQuantity,N} =
+_datatype_to_string_impl(::Type{<:StaticArray{TPL,T,N}}) where {TPL,T<:RealQuantity,N} =
     "fixedsize_array<$N>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:ArrayOfSimilarArrays{T,M,N}}) where {T,M,N} =
+_datatype_to_string_impl(::Type{<:ArrayOfSimilarArrays{T,M,N}}) where {T,M,N} =
     "array_of_equalsized_arrays<$N,$M>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:VectorOfEncodedArrays{T,N}}) where {T,N} =
+_datatype_to_string_impl(::Type{<:VectorOfEncodedArrays{T,N}}) where {T,N} =
     "array_of_encoded_arrays<1,$N>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:VectorOfEncodedSimilarArrays{T,M}}) where {T,M} =
+_datatype_to_string_impl(::Type{<:VectorOfEncodedSimilarArrays{T,M}}) where {T,M} =
     "array_of_encoded_equalsized_arrays<1,$M>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
+_datatype_to_string_impl(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
 
 # ToDo: Make this more generic:
-datatype_to_string(::Type{<:TypedTables.Table{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
-datatype_to_string(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
+_datatype_to_string_impl(::Type{<:TypedTables.Table{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
+_datatype_to_string_impl(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
 
-datatype_to_string(::Type{<:Histogram{T, N}}) where {T, N} = 
+_datatype_to_string_impl(::Type{<:Histogram{T, N}}) where {T, N} =
     "histogram<$N>$(_inner_datatype_to_string(T))"
+
+_datatype_to_string_impl(::Type{T}) where {T} =
+    throw(ArgumentError("No LH5 datatype registered for type $T"))
 
 function _cumulative_length(A::VectorOfArrays)
     elem_ptr = ArraysOfArrays.internal_element_ptr(A)
