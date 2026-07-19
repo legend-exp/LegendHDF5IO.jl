@@ -75,7 +75,8 @@ function datatype_from_string(s::AbstractString)
             T = _eldatatype_from_string(content)
             (NTuple{N,<:T} where N)
         elseif tp == "enum"
-            throw(ErrorException("Enum datatype \"$s\" is not registered"))
+            throw(ErrorException("Enum datatype \"$s\" is not registered," *
+                " use LegendHDF5IO.register_datatype! to register enum types"))
         else
             dims = parse.(Int, split(m[4], ","))
             eltp = content
@@ -124,6 +125,30 @@ function _array_type(::Type{Array{T, N}}) where {T, N}
     isconcretetype(T) ? AbstractArray{T, N} : AbstractArray{<:T, N}
 end
 
+"""
+    LegendHDF5IO.register_datatype!(name::AbstractString, ::Type{T})
+    LegendHDF5IO.register_datatype!(::Type{T})
+
+Register the LH5 datatype string `name` for type `T`, for reading and
+writing. Without `name`, the canonical datatype string of `T` is used
+(e.g. for `Enum` types).
+
+To support reading and writing values of type `T`, also define
+
+```julia
+LegendHDF5IO.LH5Array(ds::HDF5.Dataset, ::Type{<:T})
+LegendHDF5IO.create_entry(parent::LHDataStore, name::AbstractString, x::T; kwargs...)
+```
+"""
+function register_datatype!(name::AbstractString, ::Type{T}) where {T}
+    _datatype_dict[_sort_datatype_fields(name)] = T
+    filter!(p -> p.first !== T, _datatype_names)
+    push!(_datatype_names, T => name)
+    nothing
+end
+
+register_datatype!(::Type{T}) where {T} = register_datatype!(datatype_to_string(T), T)
+
 function _inner_datatype_to_string(::Type{T}) where T
     s = datatype_to_string(T)
     isempty(s) ? "" : "{$s}"
@@ -166,8 +191,15 @@ datatype_to_string(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
 datatype_to_string(::Type{<:TypedTables.Table{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
 datatype_to_string(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
 
-datatype_to_string(::Type{<:Histogram{T, N}}) where {T, N} = 
+datatype_to_string(::Type{<:Histogram{T, N}}) where {T, N} =
     "histogram<$N>$(_inner_datatype_to_string(T))"
+
+# Fallback for types registered via register_datatype!:
+function datatype_to_string(::Type{T}) where {T}
+    matches = filter(p -> T <: p.first, _datatype_names)
+    isempty(matches) && throw(ArgumentError("No LH5 datatype registered for type $T"))
+    reduce((a, b) -> b.first <: a.first ? b : a, matches).second
+end
 
 function _cumulative_length(A::VectorOfArrays)
     elem_ptr = ArraysOfArrays.internal_element_ptr(A)
