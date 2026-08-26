@@ -52,13 +52,13 @@ using Unitful
                     @test lhd["y"][:] == y
                 end
                 @testset "IO of VectorOfVectors" begin
-                    vofvec = VectorOfVectors(
+                    vofvec = VectorOfArrays(
                         [rand(-5:5, rand(1:100)) for _ in 1:50])
                     @test setindex!(lhd, vofvec, "vofvec") |> isnothing
                     @test lhd["vofvec"][:] == vofvec
                 end
                 @testset "IO of VectorOfSimilarVectors" begin
-                    vofsimvec = VectorOfSimilarVectors(
+                    vofsimvec = convert(VectorOfSimilarVectors,
                         [rand(-5:5, 100) for _ in 1:50])
                     @test setindex!(lhd, vofsimvec, "vofsimvec") |> isnothing
                     @test lhd["vofsimvec"][:] == vofsimvec
@@ -84,7 +84,7 @@ using Unitful
                 @testset "IO of VectorOfEncodedArrays" begin
                     codec = VarlenDiffArrayCodec()
                     data = [rand(-5:5, rand(1:100)) for _ in 1:50]
-                    vofvec = VectorOfVectors(data)
+                    vofvec = VectorOfArrays(data)
                     vofvec_enc = broadcast(|>, vofvec, codec)
                     @test setindex!(lhd, vofvec_enc, "vofvec_enc") |> isnothing
                     @test lhd["vofvec_enc"][:] == vofvec_enc
@@ -92,13 +92,13 @@ using Unitful
                 @testset "IO of VectorOfEncodedSimilarArrays" begin
                     codec = VarlenDiffArrayCodec()
                     data = [rand(-5:5, 100) for _ in 1:50]
-                    vofsimvec = VectorOfSimilarVectors(data)
+                    vofsimvec = convert(VectorOfSimilarVectors, data)
                     vofsimvec_enc = broadcast(|>, vofsimvec, codec)
                     @test setindex!(lhd, vofsimvec_enc, "vofsimvec_enc") |> isnothing
                     @test lhd["vofsimvec_enc"][:] == vofsimvec_enc
                 end
                 @testset "IO of ArrayOfRDWaveforms" begin
-                    data = nestedview(rand(UInt16, 50, 50)*u"m")
+                    data = VectorOfSimilarVectors(rand(UInt16, 50, 50)*u"m")
                     trng = range(0.0u"μs", 10.0u"μs"; length=50)
                     waveform = ArrayOfRDWaveforms((fill(trng, 50), data))
                     @test setindex!(lhd, waveform, "waveform") |> isnothing
@@ -138,19 +138,19 @@ using Unitful
                 end
                 @testset "append VectorOfVectors" begin
                     data = collect(eachcol(rand(55, 50)*u"m"))
-                    vofv = VectorOfVectors(data)
+                    vofv = VectorOfArrays(data)
                     newvofv = vcat(vofv, vofv)
                     lhd["vofv"] = vofv
                     @test append!(lhd["vofv"], vofv)[:] == newvofv
                 end
                 @testset "append VectorOfSimilarVectors" begin
-                    aofa = nestedview(rand(UInt16, 55, 50)*u"m")
+                    aofa = VectorOfSimilarVectors(rand(UInt16, 55, 50)*u"m")
                     newaofa = vcat(aofa, aofa)
                     lhd["aofa"] = aofa
                     @test append!(lhd["aofa"], aofa)[:] == newaofa
                 end
                 @testset "append VectorOfRDWaveforms" begin
-                    aofa = nestedview(rand(UInt16, 55, 50)*u"m")
+                    aofa = VectorOfSimilarVectors(rand(UInt16, 55, 50)*u"m")
                     trng = range(0.0u"μs", 10.0u"μs"; length=55)
                     waveform = ArrayOfRDWaveforms((fill(trng, 50), aofa))
                     new_waveform = vcat(waveform, waveform)

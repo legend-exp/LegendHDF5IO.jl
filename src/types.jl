@@ -43,7 +43,13 @@ mutable struct LH5Array{T, N} <: AbstractArray{T, N}
     file::HDF5.Dataset
 end
 
-const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
+# ArraysOfArrays v1 replaces the data dimensionality parameter of
+# ArrayOfSimilarArrays by the element type:
+@static if isdefined(ArraysOfArrays, :PartsView)
+    const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, LH5Array{T, L}}
+else
+    const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
+end
 const LHIndexType = Union{Colon, AbstractRange{Int}}
 const VectorOfRDWaveforms{T, U, VVT, VVU} = ArrayOfRDWaveforms{T, U, 1, VVT, VVU}
 const LH5VoV{T} = VectorOfVectors{T, LH5Array{T, 1}}
@@ -104,9 +110,7 @@ return an `ArraysOfSimilarArrays` where the field `data` is a `LH5Array`
 """
 LH5Array(ds::HDF5.Dataset, 
 ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
-    A = LH5Array(ds, AbstractArray{<:RealQuantity})
-    D = _ndims(A)
-    D == 2 ? nestedview(A) : nestedview(A, Val(D - 1))
+    VectorOfSimilarArrays(LH5Array(ds, AbstractArray{<:RealQuantity}))
 end
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:NamedTuple{T}}) where T
@@ -267,6 +271,11 @@ end
 
 _inv_element_ptrs(el_ptr::AbstractVector{<:Int}) = UInt32.(el_ptr .- 1)[2:end]
 
+function _append_elemptr!(dest_ptr::AbstractVector{<:Integer}, src_ptr::AbstractVector{<:Integer})
+    offset = last(dest_ptr) - first(src_ptr)
+    append!(dest_ptr, view(src_ptr, firstindex(src_ptr) + 1:lastindex(src_ptr)) .+ offset)
+end
+
 Base.size(lh::LH5Array{T, N}) where {T, N} = begin
     dspace = HDF5.dataspace(lh.file)
     try
@@ -300,8 +309,8 @@ end
 
 Base.append!(dest::LH5VoV, src::VectorOfVectors) = begin
     if !isempty(src)
-        append!(dest.data, src.data)
-        ArraysOfArrays.append_elemptr!(dest.elem_ptr, src.elem_ptr)
+        append!(dest.data, flatview(src))
+        _append_elemptr!(dest.elem_ptr, src.elem_ptr)
         append!(dest.kernel_size, src.kernel_size)
 
         # prepare elem_ptr to append to "cumulative_length"

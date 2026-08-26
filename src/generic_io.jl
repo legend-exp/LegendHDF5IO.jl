@@ -462,7 +462,7 @@ function LegendDataTypes.readdata(
         L_expected = SV.parameters[1].parameters[1][1]
         L_expected == L || throw(ErrorException("Trying to read array of static vectors of length $L_expected, but inner dimension of data has length $L"))
     end
-    nestedview(data, SVector{L})
+    reinterpret(reshape, SVector{L, eltype(data)}, data)
 end
 
 
@@ -638,7 +638,7 @@ function LegendDataTypes.readdata(
     input::HDF5.H5DataStore, name::AbstractString,
     AT::Type{<:AbstractVectorOfSimilarVectors}
 )
-    nestedview(readdata(input, name, AbstractArray{<:RealQuantity,2}))
+    VectorOfSimilarVectors(readdata(input, name, AbstractArray{<:RealQuantity,2}))
 end
 
 
