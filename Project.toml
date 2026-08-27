@@ -24,7 +24,7 @@ Measurements = "eff96d63-e80a-5855-80a2-b1b0885c5ab7"
 LegendHDF5IOMeasurementsExt = "Measurements"
 
 [compat]
-ArraysOfArrays = "0.5, 0.6"
+ArraysOfArrays = "0.5, 0.6, 1"
 ElasticArrays = "1"
 EncodedArrays = "0.4"
 H5Zzstd = "0.1.2"
