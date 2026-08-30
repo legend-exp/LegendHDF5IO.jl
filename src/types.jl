@@ -264,20 +264,44 @@ LH5Array(ds::HDF5.H5DataStore,
     VectorOfEncodedSimilarArrays{U}(codec, innersize, data)
 end
 
+# HDF5.generic_read is not type-stable, but for numeric LH5 datasets the
+# result type follows from the index types (scalar indices drop
+# dimensions). Other element types (e.g. strings) may be normalized to a
+# different Julia type by HDF5 and are left unasserted:
+
+@inline _read_ndims() = 0
+@inline _read_ndims(::Integer, idxs...) = _read_ndims(idxs...)
+@inline _read_ndims(::Union{Colon, AbstractRange}, idxs...) = _read_ndims(idxs...) + 1
+
+@inline function _read_result(val, ::Type{T}, idxs...) where {T}
+    if T <: RealQuantity
+        K = _read_ndims(idxs...)
+        K == 0 ? val::T : val::Array{T, K}
+    else
+        val
+    end
+end
+
 Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
     dtype = HDF5.datatype(lh.file)
-    val = HDF5.generic_read(lh.file, dtype, T, idxs...)
-    close(dtype)
-    return val
+    val = try
+        HDF5.generic_read(lh.file, dtype, T, idxs...)
+    finally
+        close(dtype)
+    end
+    _read_result(val, T, idxs...)
 end
 
 Base.getindex(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {N} = begin
     dtype = HDF5.datatype(lh.file)
-    val = HDF5.generic_read(lh.file, dtype, Bool, idxs...)
-    close(dtype)
-    return val .> 0
+    val = try
+        HDF5.generic_read(lh.file, dtype, Bool, idxs...)
+    finally
+        close(dtype)
+    end
+    _read_result(val, Bool, idxs...) .> 0
 end
 
 Base.getindex(lh::LH5AoSA{T, M}, idxs::LHIndexType...) where {T, M} = begin
