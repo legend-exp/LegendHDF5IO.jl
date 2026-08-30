@@ -81,7 +81,7 @@ function datatype_from_string(s::AbstractString)
         if tp == "struct"
             _namedtuple_type(split(content, ","; keepempty = false))
         elseif tp == "table"
-            TypedTables.Table{<:_namedtuple_type(split(content, ","; keepempty = false))}
+            StructArrays.StructArray{<:_namedtuple_type(split(content, ","; keepempty = false))}
         elseif tp == "ntuple"
             T = _eldatatype_from_string(content)
             (NTuple{N,<:T} where N)
@@ -233,7 +233,6 @@ _datatype_to_string_impl(::Type{<:VectorOfEncodedSimilarArrays{T,M}}) where {T,M
 _datatype_to_string_impl(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
 
 # ToDo: Make this more generic:
-_datatype_to_string_impl(::Type{<:TypedTables.Table{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
 _datatype_to_string_impl(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
 
 _datatype_to_string_impl(::Type{<:Histogram{T, N}}) where {T, N} =
