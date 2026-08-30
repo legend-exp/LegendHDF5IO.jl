@@ -13,6 +13,10 @@ read partially without loading the whole array first. `append!` extends the
 on-disk array (which requires it to be chunked); data is always appended
 along the last dimension.
 
+`LH5Array` implements the [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl)
+interface: views, iteration and reductions read the data block-wise, and
+broadcasts are lazy.
+
 # Default constructors
 
 ```julia
@@ -34,7 +38,7 @@ julia> append!(lh, x)   # append those 10 elements to the on-disk array
 [...]
 ```
 """
-mutable struct LH5Array{T, N} <: AbstractArray{T, N}
+mutable struct LH5Array{T, N} <: DiskArrays.AbstractDiskArray{T, N}
     file::HDF5.Dataset
 end
 
@@ -397,14 +401,17 @@ function _cat_lastdim(parts::AbstractVector{<:AbstractArray{T, K}}, n::Int) wher
     out
 end
 
-function _is_contiguous(ds::HDF5.Dataset)
+function _with_create_properties(f, ds::HDF5.Dataset)
     dcpl = HDF5.get_create_properties(ds)
     try
-        dcpl.layout == :contiguous
+        f(dcpl)
     finally
         close(dcpl)
     end
 end
+
+_is_contiguous(ds::HDF5.Dataset) = _with_create_properties(p -> p.layout == :contiguous, ds)
+_chunk_dims(ds::HDF5.Dataset) = _with_create_properties(p -> p.layout == :chunked ? p.chunk : nothing, ds)
 
 # HDF5.jl gained bindings for these libhdf5 functions in v0.17:
 @static if isdefined(HDF5.API, :h5s_select_elements)
@@ -523,16 +530,32 @@ Base.getindex(lh::LH5Array{T, N},
 ) where {T, N} = begin
     front, ilast = Base.front(idxs), idxs[end]
     if ilast isa AbstractVector{Bool}
-        lh[front..., findall(ilast)]
+        lh[front..., findall(_materialize(ilast))]
     elseif ilast isa Base.LogicalIndex
-        # to_indices turns logical masks into iterate-only LogicalIndex:
-        lh[front..., findall(ilast.mask)]
+        # to_indices turns logical masks into iterate-only LogicalIndex;
+        # materialize the mask, iterating it would read lazy masks per element:
+        lh[front..., findall(_materialize(ilast.mask))]
     elseif ilast isa AbstractVector{<:Integer} && !(ilast isa AbstractRange) &&
         all(i -> i isa HDF5.IndexType, front)
         _getindex_scattered_lastdim(lh, front, ilast)
     else
-        invoke(getindex, Tuple{AbstractArray{T, N}, Vararg{Any, N}}, lh, idxs...)
+        invoke(getindex, Tuple{DiskArrays.AbstractDiskArray{T, N}, Vararg{Any, N}}, lh, idxs...)
     end
+end
+
+# DiskArrays interface:
+
+function DiskArrays.readblock!(lh::LH5Array{T, N}, aout, r::Vararg{AbstractUnitRange, N}) where {T, N}
+    aout .= lh[map(UnitRange{Int}, r)...]
+    nothing
+end
+
+DiskArrays.haschunks(lh::LH5Array) =
+    isnothing(_chunk_dims(lh.file)) ? DiskArrays.Unchunked() : DiskArrays.Chunked()
+
+function DiskArrays.eachchunk(lh::LH5Array)
+    chunk = _chunk_dims(lh.file)
+    isnothing(chunk) ? DiskArrays.estimate_chunksize(lh) : DiskArrays.GridChunks(lh, chunk)
 end
 
 Base.size(lh::LH5Array{T, N}) where {T, N} = begin
@@ -554,7 +577,7 @@ end
 # Deep conversion of lazily read data into in-memory objects:
 
 _materialize(x) = x
-_materialize(A::LH5Array{T, N}) where {T, N} = A[ntuple(_ -> Colon(), Val(N))...]
+_materialize(A::DiskArrays.AbstractDiskArray) = Array(A)
 _materialize(A::LH5VoV) = VectorOfVectors(_materialize(A.data), copy(A.elem_ptr))
 _materialize(A::LH5AoSA{T, M}) where {T, M} =
     ArrayOfSimilarArrays{T, M}(_materialize(A.data))

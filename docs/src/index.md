@@ -29,8 +29,12 @@ end
 ```
 
 Datasets are wrapped as lazy [`LH5Array`](@ref)s, so slicing reads only the
-requested part of the data from disk. Nested structures (`NamedTuple`s,
-tables, waveforms) are represented as HDF5 groups.
+requested part of the data from disk. `LH5Array` implements the
+[DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl) interface: views,
+iteration and reductions like `sum` read the data block by block, and
+broadcasts over `LH5Array`s are lazy, evaluated chunk-wise when collected or
+written. Nested structures (`NamedTuple`s, tables, waveforms) are represented
+as HDF5 groups.
 
 ### Tables and waveforms
 

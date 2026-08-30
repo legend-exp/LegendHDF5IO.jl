@@ -12,6 +12,7 @@ using StructArrays
 using Tables
 using Unitful
 
+import DiskArrays
 import HDF5
 import TypedTables
 using Tables: columns
