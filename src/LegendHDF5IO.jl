@@ -22,6 +22,7 @@ using LegendDataTypes: readdata, writedata, getunits, setunits!,
 using RadiationDetectorSignals: RealQuantity, ArrayOfRDWaveforms
 
 import H5Zzstd
+using Preferences: @load_preference
 
 
 include("generic_io.jl")
@@ -33,6 +34,8 @@ include("types.jl")
 const _datatype_dict = Dict{String,Type}()
 
 function __init__()
+    scatter_bulk_max_bytes[] = @load_preference("scatter_bulk_max_bytes", 2^20)
+    scatter_bulk_max_waste[] = @load_preference("scatter_bulk_max_waste", 4)
     _datatype_dict[_sort_datatype_fields(datatype_to_string(EventType))] = EventType
     _datatype_dict[_sort_datatype_fields(datatype_to_string(DAQType))] = DAQType
     _datatype_dict[_sort_datatype_fields("table{t0,dt,values}")] = Vector{<:RDWaveform}
