@@ -11,7 +11,7 @@ using Measurements
 using RadiationDetectorSignals
 using StaticArrays
 using StatsBase
-using TypedTables
+using StructArrays
 using Unitful
 
 @testset verbose=true "test wrapper" begin
@@ -128,10 +128,13 @@ using Unitful
                     @test lhd["waveform"][:] == waveform
                     @test !isdefined(LegendHDF5IO, :g_state)
                 end
-                @testset "IO of Table" begin
-                    tbl = Table(a=rand(10), b=rand(10))
+                @testset "IO of tables" begin
+                    tbl = StructArray((a = rand(10), b = rand(10)))
                     @test setindex!(lhd, tbl, "tbl") |> isnothing
                     @test lhd["tbl"][:] == tbl
+                    # a table is a vector of rows, columns of other shapes are refused:
+                    @test_throws ArgumentError lhd["tbl2d"] = StructArray((x = reshape(collect(1:6), 2, 3),))
+                    @test !haskey(lhd.data_store, "tbl2d")
                 end
                 @testset "IO of Measurements" begin
                     m = 2.0 ± 0.1
@@ -320,10 +323,10 @@ using Unitful
             for mode in (:zstd, :deflate)
                 path = joinpath(tmp, "tmp_$(mode).lh5")
                 lh5open(path, "cw"; compress=mode) do lhd
-                    tbl = Table(
+                    tbl = StructArray((
                         e = rand(Float32, 100),
                         wf = VectorOfSimilarVectors(rand(UInt16, 50, 100)),
-                    )
+                    ))
                     lhd["t"] = tbl
                     append!(lhd["t"], tbl)
                     @test lhd["t"][:] == vcat(tbl, tbl)
@@ -355,7 +358,7 @@ using Unitful
             path = joinpath(tmp, "tmp.lh5")
             lh5open(path, "cw"; usechunks=true) do lhd
                 @testset "append Tables" begin
-                    tbl = Table(x=rand(10), y=rand(10))
+                    tbl = StructArray((x = rand(10), y = rand(10)))
                     newtbl = vcat(tbl, tbl)
                     lhd["tbl"] = tbl
                     @test append!(lhd["tbl"], tbl)[:] == newtbl
@@ -404,14 +407,14 @@ using Unitful
             lh5open(path, "cw") do lhd
                 @testset verbose=true "Tables" begin
                     x, y = rand(10), rand(10)*u"mm"
-                    tbl = Table(x=x, y=y)
+                    tbl = StructArray((x = x, y = y))
                     lhd["tbl"] = tbl
                     @testset verbose=true "deleting entry" begin
                         @test delete_entry!(lhd, "tbl/y") |> isnothing
-                        @test lhd["tbl"][:] == Table(tbl, y=nothing)
+                        @test lhd["tbl"][:] == StructArray((x = x,))
                     end
                     @testset "adding entry" begin
-                        @test add_entries!(lhd, "tbl", Table(y=y)) |> isnothing
+                        @test add_entries!(lhd, "tbl", StructArray((y = y,))) |> isnothing
                         @test lhd["tbl"][:] == tbl
                     end
                 end
@@ -431,7 +434,7 @@ using Unitful
                 @testset verbose=true "error paths" begin
                     delete_entry!(lhd, "nt/y")
                     @test_throws ArgumentError delete_entry!(lhd, "nt/x")
-                    @test_throws DimensionMismatch add_entries!(lhd, "tbl", Table(z=rand(3)))
+                    @test_throws DimensionMismatch add_entries!(lhd, "tbl", StructArray((z = rand(3),)))
                 end
             end
         end

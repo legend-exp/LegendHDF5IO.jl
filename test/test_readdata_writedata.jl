@@ -10,7 +10,7 @@ using Measurements
 using RadiationDetectorSignals
 using StaticArrays
 using StatsBase
-using TypedTables
+using StructArrays
 using Unitful
 
 using LegendDataTypes
@@ -93,7 +93,7 @@ end
     @testset "structs and tables" begin
         nt = (a = 42, b = rand(5)*u"mm", c = "text")
         @test _roundtrip(nt) == nt
-        tbl = Table(a = rand(10), b = rand(10)*u"keV")
+        tbl = StructArray((a = rand(10), b = rand(10)*u"keV"))
         @test _roundtrip(tbl) == tbl
     end
 
