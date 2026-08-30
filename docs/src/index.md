@@ -22,6 +22,7 @@ end
 lh5open("data.lh5") do lhd
     E = lhd["energy"]       # lazy, disk-backed LH5Array
     E_first = E[1:100]      # reads only the first 100 elements
+    E_some = E[[1, 7, 42]]  # scattered reads are efficient, too
     E_all = E[:]            # reads the full array
     lhd["metadata"]         # NamedTuples are read back directly
 end
@@ -58,6 +59,13 @@ end
 
 Reading `lhd["evt"]` returns a `Table` whose columns are disk-backed; use
 `lhd["evt"][:]` or index with a range to materialize rows.
+
+Scattered reads either read the whole index span the events cover, or the
+events themselves. The thresholds for that choice,
+[`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) and
+[`LegendHDF5IO.scatter_bulk_max_waste`](@ref), default to local storage;
+raise them on filesystems with a high per-operation latency, such as
+cluster filesystems.
 
 ### Appending
 
