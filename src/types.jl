@@ -52,6 +52,9 @@ end
 const LHIndexType = Union{Colon, AbstractRange{Int}, AbstractVector{Int}}
 const VectorOfRDWaveforms{T, U, VVT, VVU} = ArrayOfRDWaveforms{T, U, 1, VVT, VVU}
 const LH5VoV{T} = VectorOfVectors{T, LH5Array{T, 1}}
+const LH5TableColumn = Union{LH5Array{<:Any, 1}, LH5VoV, LH5AoSA{<:Any, <:Any, 1}}
+const LH5TableColumns = NamedTuple{names, <:Tuple{Vararg{LH5TableColumn}}} where names
+const LH5Table = StructArrays.StructVector{<:NamedTuple, <:LH5TableColumns}
 const LH5ArrayOfRDWaveforms{T, U, N, VVT} = 
     ArrayOfRDWaveforms{T, U, N, VVT, <:Union{LH5VoV{U}, LH5AoSA{U}}}
 const LH5VectorOfRDWaveforms{T, U} = LH5ArrayOfRDWaveforms{T, U, 1}
@@ -135,12 +138,12 @@ return a `NamedTuple` where each `field` is the output of `LH5Array` applied to 
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:NamedTuple{T}}) where {T} =
     NamedTuple{T}(map(k -> LH5Array(ds[String(k)]), T))
 """
-    LH5Array(ds::HDF5.DataStore, ::Type{<:TypedTables.Table{<:NamedTuple{(T)}}}) where T
+    LH5Array(ds::HDF5.DataStore, ::Type{<:StructArray{<:NamedTuple{(T)}}}) where T
 
-return a `Table` where each column is the output of `LH5Array` applied to it.
+return a `StructArray` where each column is the output of `LH5Array` applied to it.
 """
-LH5Array(ds::HDF5.H5DataStore, ::Type{<:Table{<:NamedTuple{(T)}}}) where T = 
-    Table(LH5Array(ds, NamedTuple{T}))
+LH5Array(ds::HDF5.H5DataStore, ::Type{<:StructArray{<:NamedTuple{(T)}}}) where T =
+    StructArray(LH5Array(ds, NamedTuple{T}))
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:AbstractVector{<:RDWaveform}})
 
@@ -149,7 +152,7 @@ return an `ArrayOfRDWaveforms` where the field `signal` is either a
 with an `LH5Array` as `data` (see `ArrayOfRDWaveforms` and `ArraysOfArrays`) 
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractVector{<:RDWaveform}}) = begin
-    tbl = LH5Array(ds, Table{<:NamedTuple{(:t0, :dt, :values)}})
+    tbl = LH5Array(ds, StructArray{<:NamedTuple{(:t0, :dt, :values)}})
     from_table(tbl, AbstractVector{<:RDWaveform})
 end
 """
@@ -582,7 +585,8 @@ _materialize(A::LH5VoV) = VectorOfVectors(_materialize(A.data), copy(A.elem_ptr)
 _materialize(A::LH5AoSA{T, M}) where {T, M} =
     ArrayOfSimilarArrays{T, M}(_materialize(A.data))
 _materialize(x::NamedTuple) = map(_materialize, x)
-_materialize(tbl::Table) = Table(map(_materialize, Tables.columns(tbl)))
+_materialize(A::StructArray{<:NamedTuple}) =
+    StructArray(map(_materialize, StructArrays.components(A)))
 _materialize(A::ArrayOfRDWaveforms) =
     ArrayOfRDWaveforms((_materialize(A.time), _materialize(A.signal)))
 _materialize(A::VectorOfEncodedArrays{T}) where {T} =
@@ -626,6 +630,33 @@ Base.append!(dest::LH5VoV, src::VectorOfVectors) = begin
     end
     dest
 end
+
+# Non-scalar reads of disk-backed tables must recompute the row type, since
+# the element type of lazy columns changes when they are read:
+Base.getindex(A::LH5Table, idxs::Union{AbstractVector, Colon}) =
+    StructArray(map(col -> col[idxs], StructArrays.components(A)))
+
+# StructArrays appends column-wise only when the element types of both
+# tables match exactly, which disk-backed and in-memory tables rarely do:
+function _append_table!(dest, src)
+    dcols = StructArrays.components(dest)
+    scols = Tables.columntable(src)
+    issetequal(keys(dcols), keys(scols)) || throw(ArgumentError(
+        "Cannot append table with columns $(keys(scols)) to table with columns $(keys(dcols))"))
+    for k in keys(dcols)
+        append!(dcols[k], scols[k])
+    end
+    dest
+end
+
+Base.append!(dest::LH5Table, src) = _append_table!(dest, src)
+
+# Disambiguation against the column-wise append of StructArrays and the
+# element append of EncodedArrays:
+Base.append!(dest::StructArrays.StructVector{T, <:LH5TableColumns},
+    src::StructArrays.StructVector{T}) where {T<:NamedTuple} = _append_table!(dest, src)
+Base.append!(dest::LH5Table, src::EncodedArray) =
+    throw(ArgumentError("Cannot append an encoded array to a table"))
 
 Base.append!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
     # first append values to on-disk array
@@ -1019,14 +1050,15 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
-# write Table
-function create_entry(parent::LHDataStore, name::AbstractString, data; 
+# write tables (anything that satisfies the Tables.jl column interface)
+function create_entry(parent::LHDataStore, name::AbstractString, data;
     kwargs...)
 
     Tables.istable(data) || throw(ArgumentError("Value to write, of type "
     *"$(typeof(data)), is not a table"))
-    create_entry(parent, name, Tables.columns(Table(data)); kwargs...)
-    setdatatype!(parent.data_store[name], typeof(data))
+    cols = Tables.columntable(data)
+    create_entry(parent, name, cols; kwargs...)
+    setdatatype!(parent.data_store[name], StructArray{NamedTuple{keys(cols)}})
     nothing
 end
 
@@ -1068,19 +1100,20 @@ function lh5open(f::Function, filename::AbstractString,
 end
 
 """
-    add_entries!(lhd::LHDataStore, i::AbstractString, src::TypedTables.Table,
-        dest::TypedTables.Table=LH5Array(lhd.data_store[i]))
+    add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray,
+        dest::StructArray=LH5Array(lhd.data_store[i]))
 
-extend the Table `dest` at `lhd[i]` with columns from `src`.
+extend the table `dest` at `lhd[i]` with columns from `src`.
 """
 function add_entries!(lhd::LHDataStore, i::AbstractString,
-    src::Table, dest::Table=LH5Array(lhd.data_store[i]))
+    src::StructArray{<:NamedTuple},
+    dest::StructArray{<:NamedTuple} = LH5Array(lhd.data_store[i]))
 
     length(dest) == length(src) || throw(DimensionMismatch(
         "Cannot add columns of length $(length(src)) to table of length $(length(dest))"))
-    tbl = Table(dest, src)
-    add_entries!(lhd, i, columns(src), columns(dest))
-    setdatatype!(lhd.data_store[i], typeof(tbl))
+    new_cols = (; StructArrays.components(dest)..., StructArrays.components(src)...)
+    add_entries!(lhd, i, StructArrays.components(src), StructArrays.components(dest))
+    setdatatype!(lhd.data_store[i], StructArray{NamedTuple{keys(new_cols)}})
     nothing
 end
 
@@ -1106,8 +1139,8 @@ export add_entries!
     delete_entry!(lhd::LHDataStore, i::AbstractString)
 
 remove the dataset `lhd[i]` and adjust the datatype of the parent if necessary. 
-Currently supported are elements of `NamedTuple`, `TypedTable.Table` or 
-`HDF5.Group`. 
+Currently supported are elements of `NamedTuple`s, tables or
+`HDF5.Group`s.
 """
 function delete_entry!(lhd::LHDataStore, i::AbstractString)
     parent, child = splitdir(i)
@@ -1132,11 +1165,11 @@ function _delete_entry(lhd::LHDataStore, nt::NamedTuple,
     nothing
 end
 
-function _delete_entry(lhd::LHDataStore, tbl::Table, parent::AbstractString, 
-    child::AbstractString)
+function _delete_entry(lhd::LHDataStore, tbl::StructArray{<:NamedTuple},
+    parent::AbstractString, child::AbstractString)
 
-    _delete_entry(lhd, columns(tbl), parent, child)
-    new_tbl = Table(lhd[parent])
-    setdatatype!(lhd.data_store[parent], typeof(new_tbl))
+    _delete_entry(lhd, StructArrays.components(tbl), parent, child)
+    newkeys = filter(!=(Symbol(child)), propertynames(tbl))
+    setdatatype!(lhd.data_store[parent], StructArray{NamedTuple{newkeys}})
     nothing
 end

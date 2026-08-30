@@ -38,17 +38,18 @@ as HDF5 groups.
 
 ### Tables and waveforms
 
-Tables (e.g. `TypedTables.Table`) and vectors of `RDWaveform`s round-trip
-through their LH5 representation:
+Tables and vectors of `RDWaveform`s round-trip through their LH5
+representation. Tables are read as `StructArray`s of `NamedTuple` rows;
+anything satisfying the Tables.jl column interface can be written:
 
 ```julia
-using TypedTables, ArraysOfArrays, RadiationDetectorSignals
+using StructArrays, ArraysOfArrays, RadiationDetectorSignals
 
-tbl = Table(
+tbl = StructArray((
     evtno = collect(1:100),
     energy = rand(100) .* u"keV",
     samples = VectorOfVectors([rand(-5:5, 50) for _ in 1:100]),
-)
+))
 
 wfs = ArrayOfRDWaveforms((
     fill(range(0.0u"μs", 10.0u"μs", length = 1000), 100),
@@ -61,8 +62,8 @@ lh5open("events.lh5", "cw") do lhd
 end
 ```
 
-Reading `lhd["evt"]` returns a `Table` whose columns are disk-backed; use
-`lhd["evt"][:]` or index with a range to materialize rows.
+Reading `lhd["evt"]` returns a `StructArray` whose columns are disk-backed;
+use `lhd["evt"][:]` or index with a range to materialize rows.
 
 ### Appending and compression
 
@@ -88,7 +89,7 @@ Columns and struct fields can be added and removed in place with
 
 ```julia
 lh5open("events.lh5", "r+") do lhd
-    add_entries!(lhd, "evt", Table(quality = rand(Bool, 100)))
+    add_entries!(lhd, "evt", StructArray((quality = rand(Bool, 100),)))
     delete_entry!(lhd, "evt/quality")
 end
 ```
