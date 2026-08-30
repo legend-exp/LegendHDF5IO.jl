@@ -5,7 +5,7 @@ using LegendHDF5IO
 
 using HDF5
 using StaticArrays
-using TypedTables
+using StructArrays
 using Unitful
 
 function _write_gears_fixture(path::AbstractString)
@@ -36,7 +36,7 @@ end
             _write_gears_fixture(path)
             hits = open(read, path, Geant4HDF5Input)
             # event 2 has no energy deposition and is dropped
-            @test hits isa Table
+            @test hits isa StructArray{<:NamedTuple}
             @test hits.evtno == Int32[1, 1, 2, 2, 2]
             @test hits.edep == Float32[1.0, 2.0, 0.5, 0.25, 0.25] .* u"keV"
             @test hits.thit == Float32[10, 20, 40, 50, 60] .* u"s"
@@ -50,7 +50,7 @@ end
             input = open(path, Geant4HDF5Input)
             try
                 hits = input[:]
-                @test hits isa Table
+                @test hits isa StructArray{<:NamedTuple}
                 @test hits.evtno == Int32[10, 10, 11]
                 @test hits.detno == Int32[1, 2, 1]
                 @test hits.volID == ones(Int32, 3)

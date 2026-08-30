@@ -1,11 +1,11 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT
 
 function to_table(x::ArrayOfRDWaveforms)
-    TypedTables.Table(
+    StructArray((
         t0 = first.(x.time),
         dt = step.(x.time),
         values = x.signal
-    )
+    ))
 end
 
 function to_table(x::AbstractVector{<:RDWaveform})
