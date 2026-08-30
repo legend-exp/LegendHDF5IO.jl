@@ -22,6 +22,7 @@ end
 lh5open("data.lh5") do lhd
     E = lhd["energy"]       # lazy, disk-backed LH5Array
     E_first = E[1:100]      # reads only the first 100 elements
+    E_some = E[[1, 7, 42]]  # scattered reads are efficient, too
     E_all = E[:]            # reads the full array
     lhd["metadata"]         # NamedTuples are read back directly
 end
