@@ -9,7 +9,7 @@ using HDF5
 using Measurements
 using RadiationDetectorSignals
 using StatsBase
-using TypedTables
+using StructArrays
 using Unitful
 
 using ArraysOfArrays: AbstractArrayOfSimilarArrays

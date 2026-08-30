@@ -8,7 +8,7 @@ export Geant4HDF5Input
 Input wrapper for Geant4 HDF5 files in GEARS or g4simple layout.
 
 Use via `open(filename, Geant4HDF5Input)` (or the corresponding `do`-block
-form) and `read(input)`, which returns a hits `Table`.
+form) and `read(input)`, which returns a table of hits.
 """
 struct Geant4HDF5Input <: AbstractLegendInput
     hdf5file::HDF5.File
@@ -89,7 +89,7 @@ function Base.read(input::GEARS_HDF5Input)
     y0 = col(Float32, "y_data/pages", 0)
     z0 = col(Float32, "z_data/pages", 0)
 
-    hits = TypedTables.Table(
+    hits = StructArray((
         evtno = evtno,
         detno = col(Int32, "vlm_data/pages", 1),
         thit = col(Float32, "t_data/pages", 0) .* u"s",
@@ -102,7 +102,7 @@ function Base.read(input::GEARS_HDF5Input)
         trk = col(Int32, "trk_data/pages", 0),
         pdg = col(Int32, "pdg_data/pages", 0),
         pro = col(Int32, "pro_data/pages", 0),
-    )
+    ))
     return hits
 end
 
@@ -119,7 +119,7 @@ function Base.read(input::G4SIMPLE_HDF5Input)
 
     # The detector is identified by the volume copy number (iRep), while
     # volID identifies the logical volume:
-    hits = TypedTables.Table(
+    hits = StructArray((
         evtno = evtno,
         detno = col(Int32, "iRep/pages", 1),
         thit = col(Float32, "t/pages", 0) .* u"ns",
@@ -131,6 +131,6 @@ function Base.read(input::G4SIMPLE_HDF5Input)
         mom = col(Int32, "parentID/pages", 0),
         trk = col(Int32, "trackID/pages", 0),
         pdg = col(Int32, "pid/pages", 0),
-    )
+    ))
     return hits
 end
