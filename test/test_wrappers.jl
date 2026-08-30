@@ -4,6 +4,7 @@ using Test
 using LegendHDF5IO
 
 using ArraysOfArrays
+using DiskArrays
 using EncodedArrays
 using HDF5
 using Measurements
@@ -219,6 +220,63 @@ using Unitful
             end
         end
     end
+    @testset verbose=true "DiskArrays interface" begin
+        mktempdir() do dir
+            x = rand(Float32, 50_000)
+            data = rand(UInt16, 100, 3000)
+            flags = rand(Bool, 100)
+            lh5open(joinpath(dir, "diskarrays.lh5"), "cw") do lhd
+                lhd["x"] = x * u"keV"
+                lhd["wf"] = VectorOfSimilarVectors(data)
+                lhd["flags"] = flags
+            end
+            lh5open(joinpath(dir, "diskarrays_chunked.lh5"), "cw", usechunks = true) do lhd
+                lhd["wf"] = VectorOfSimilarVectors(data)
+            end
+            lh5open(joinpath(dir, "diskarrays.lh5")) do lhd
+                X = lhd["x"]
+                @test X isa DiskArrays.AbstractDiskArray
+                @test DiskArrays.haschunks(X) isa DiskArrays.Unchunked
+                @test sum(X) ≈ sum(x) * u"keV"
+                @test maximum(X) == maximum(x) * u"keV"
+                @test collect(X) == x * u"keV"
+                @test collect(Iterators.take(X, 3)) == x[1:3] * u"keV"
+                v = view(X, 10:20)
+                @test v isa DiskArrays.AbstractDiskArray
+                @test collect(v) == x[10:20] * u"keV"
+                bc = X .* 2
+                @test bc isa DiskArrays.AbstractDiskArray
+                @test collect(bc) == x * 2u"keV"
+                # Explicit reads stay eager and type-stable:
+                @test @inferred(X[1:10]) == x[1:10] * u"keV"
+                @test @inferred(X[[1, 5, 40_000]]) == x[[1, 5, 40_000]] * u"keV"
+                @test @inferred(X[3]) == x[3] * u"keV"
+                mask = x .> 0.5f0
+                @test @inferred(X[mask]) == x[mask] * u"keV"
+                @test X[X .> 0.5f0 * u"keV"] == x[mask] * u"keV"
+                # StructArrays and other to_indices users pass LogicalIndex:
+                @test X[Base.to_indices(X, (mask,))...] == x[mask] * u"keV"
+                @test X[Base.to_indices(X, (X .> 0.5f0 * u"keV",))...] == x[mask] * u"keV"
+
+                W = lhd["wf"]
+                @test W[3] isa DiskArrays.AbstractDiskArray
+                @test sum(W[3]) == sum(data[:, 3])
+                @test map(sum, view(W, 1:10)) == vec(sum(data[:, 1:10], dims = 1))
+                @test W.data[[2, 5], 1:3] == data[[2, 5], 1:3]
+                @test @inferred(W.data[:, [2, 5, 2999]]) == data[:, [2, 5, 2999]]
+                @test W.data[:, mask[1:3000]] == data[:, mask[1:3000]]
+
+                @test count(lhd["flags"]) == count(flags)
+            end
+            lh5open(joinpath(dir, "diskarrays_chunked.lh5")) do lhd
+                W = lhd["wf"].data
+                @test DiskArrays.haschunks(W) isa DiskArrays.Chunked
+                @test DiskArrays.eachchunk(W) == DiskArrays.GridChunks(W, (100, 3000))
+                @test sum(W) == sum(data)
+            end
+        end
+    end
+
     @testset verbose=true "compressed writing" begin
         mktempdir(pwd()) do tmp
             for mode in (:zstd, :deflate)
