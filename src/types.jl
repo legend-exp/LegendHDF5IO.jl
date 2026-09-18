@@ -42,14 +42,7 @@ mutable struct LH5Array{T, N} <: DiskArrays.AbstractDiskArray{T, N}
     file::HDF5.Dataset
 end
 
-# ArraysOfArrays v1 replaces the data dimensionality parameter of
-# ArrayOfSimilarArrays by the element type:
-@static if isdefined(ArraysOfArrays, :PartsView)
-    const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, LH5Array{T, L}}
-else
-    const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, L, LH5Array{T, L}}
-end
-const LHIndexType = Union{Colon, AbstractRange{Int}, AbstractVector{Int}}
+const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, LH5Array{T, L}}
 const VectorOfRDWaveforms{T, U, VVT, VVU} = ArrayOfRDWaveforms{T, U, 1, VVT, VVU}
 const LH5VoV{T} = VectorOfVectors{T, LH5Array{T, 1}}
 const LH5TableColumn = Union{LH5Array{<:Any, 1}, LH5VoV, LH5AoSA{<:Any, <:Any, 1}}
@@ -316,11 +309,6 @@ Base.getindex(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
     _read_result(val, Bool, idxs...) .> 0
 end
 
-Base.getindex(lh::LH5AoSA{T, M}, idxs::LHIndexType...) where {T, M} = begin
-    indices = (ArraysOfArrays._ncolons(Val{M}())..., idxs...)
-    ArrayOfSimilarArrays{T, M}(lh.data[indices...])
-end
-
 function _append_elemptr!(dest_ptr::AbstractVector{<:Integer}, src_ptr::AbstractVector{<:Integer})
     offset = last(dest_ptr) - first(src_ptr)
     append!(dest_ptr, view(src_ptr, firstindex(src_ptr) + 1:lastindex(src_ptr)) .+ offset)
@@ -572,10 +560,8 @@ Base.size(lh::LH5Array{T, N}) where {T, N} = begin
     end
 end
 
-Base.copyto!(dest::Array, src::LH5Array) = begin
-    indices = ArraysOfArrays._ncolons(Val{ndims(src)}())
-    copyto!(dest, src.file, indices...)
-end
+Base.copyto!(dest::Array, src::LH5Array{T, N}) where {T, N} =
+    copyto!(dest, src.file, ntuple(_ -> Colon(), Val(N))...)
 
 # Deep conversion of lazily read data into in-memory objects:
 
@@ -606,7 +592,7 @@ Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
     old_size = size(dest)
     new_size = (old_size[1:N-1]..., old_size[N] + size(src, N))
     from, to = old_size[N] + 1, new_size[N]
-    indices = (ArraysOfArrays._ncolons(Val{N-1}())..., from:to)
+    indices = (ntuple(_ -> Colon(), Val(N - 1))..., from:to)
     HDF5.set_extent_dims(dest.file, new_size)
     dest.file[indices...] = _ustrip(x)
     dest
