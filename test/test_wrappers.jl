@@ -276,7 +276,10 @@ using Unitful
                 bc = X .* 2
                 @test bc isa DiskArrays.AbstractDiskArray
                 @test collect(bc) == x * 2u"keV"
-                # Explicit reads stay eager and type-stable:
+                # map is eager, as in Base, while broadcasting is lazy:
+                @test map(v -> 2v, X) isa Vector
+                @test map(v -> 2v, X) == x * 2u"keV"
+                # explicit reads stay eager and type-stable:
                 @test @inferred(X[1:10]) == x[1:10] * u"keV"
                 @test @inferred(X[[1, 5, 40_000]]) == x[[1, 5, 40_000]] * u"keV"
                 @test @inferred(X[3]) == x[3] * u"keV"
@@ -314,6 +317,93 @@ using Unitful
                 @test DiskArrays.haschunks(W) isa DiskArrays.Chunked
                 @test DiskArrays.eachchunk(W) == DiskArrays.GridChunks(W, (100, 3000))
                 @test sum(W) == sum(data)
+            end
+        end
+    end
+
+    @testset verbose=true "in-place writes" begin
+        mktempdir(pwd()) do tmp
+            path = joinpath(tmp, "write.lh5")
+            lh5open(path, "cw") do lhd
+                lhd["x"] = rand(Float32, 100) * u"keV"
+                lhd["b"] = rand(Bool, 20)
+                lhd["wf"] = VectorOfSimilarVectors(rand(UInt16, 10, 30))
+            end
+            lh5open(path, "r+") do lhd
+                X, B, W = lhd["x"], lhd["b"], lhd["wf"]
+                X[1:3] = Float32[1, 2, 3] * u"keV"
+                @test X[1:3] == Float32[1, 2, 3] * u"keV"
+                # values in a compatible unit are converted:
+                X[4] = 5000f0 * u"eV"
+                @test X[4] == 5f0 * u"keV"
+                X[10:20] .= 0f0 * u"keV"
+                @test all(iszero, X[10:20])
+                copyto!(view(X, 30:39), fill(7f0 * u"keV", 10))
+                @test all(==(7f0 * u"keV"), X[30:39])
+                B[1:2] = [true, false]
+                @test B[1:2] == [true, false]
+                W.data[:, 2] = fill(0x0007, 10)
+                @test W[2] == fill(0x0007, 10)
+                @test_throws Unitful.DimensionError X[5] = 1f0
+                @test_throws BoundsError X[101:102] = Float32[0, 0] * u"keV"
+                # repeated indices in a write would corrupt the elements in between,
+                # whichever path the write takes:
+                before = X[1:3]
+                v = Float32[7, 8, 9] * u"keV"
+                @test_throws ArgumentError X[[1, 1, 3]] = v
+                @test_throws ArgumentError X[[1, 1, 3]] .= v
+                @test_throws ArgumentError view(X, [1, 1, 3]) .= v
+                @test_throws ArgumentError view(X, 1:10)[[1, 1, 3]] = v
+                @test_throws ArgumentError X[[CartesianIndex(1), CartesianIndex(1), CartesianIndex(3)]] = v
+                @test X[1:3] == before
+                M = W.data
+                mbefore = M[:, :]
+                @test_throws ArgumentError M[[1, 1, 3]] = fill(0x0001, 3)
+                @test_throws ArgumentError M[[CartesianIndex(1, 1), CartesianIndex(1, 1), CartesianIndex(1, 2)]] = fill(0x0001, 3)
+                @test_throws ArgumentError M[reshape([CartesianIndex(1, 1), CartesianIndex(1, 1), CartesianIndex(1, 2), CartesianIndex(2, 2)], 2, 2)] = fill(0x0001, 2, 2)
+                @test_throws ArgumentError M[reshape([1, 1, 3, 4], 2, 2)] = fill(0x0001, 2, 2)
+                @test M[:, :] == mbefore
+                # an out-of-bounds write writes nothing:
+                @test_throws BoundsError X[[2, 101]] = Float32[0, 0] * u"keV"
+                @test X[1:3] == before
+                X[[9, 8]] = Float32[90, 80] * u"keV"
+                @test X[8:9] == Float32[80, 90] * u"keV"
+                view(X, [5, 7]) .= 1f0 * u"keV"
+                @test X[[5, 7]] == Float32[1, 1] * u"keV"
+                M[[1, 3]] = UInt16[1, 3]
+                @test M[1:3] == [0x0001, mbefore[2], 0x0003]
+            end
+            lh5open(path) do lhd
+                @test lhd["x"][1:3] == Float32[1, 2, 3] * u"keV"
+                @test lhd["wf"][2] == fill(0x0007, 10)
+            end
+            # writes into a view are checked as a whole, not chunk by chunk:
+            lh5open(joinpath(tmp, "chunked.lh5"), "cw"; usechunks = true) do lhd
+                lhd["c"] = Float32[1, 2, 3]
+                append!(lhd["c"], Float32.(4:12))
+                C = lhd["c"]
+                @test_throws ArgumentError view(C, [1, 4, 4, 6]) .= 99f0
+                @test_throws ArgumentError view(C, [1, 4, 7, 1]) .= 99f0
+                @test_throws ArgumentError copyto!(view(C, [1, 4, 7, 1]), Float32[1, 2, 3, 4])
+                @test_throws ArgumentError fill!(view(C, [2, 2]), 0f0)
+                @test C[:] == Float32.(1:12)
+                view(C, [1, 4, 7]) .= 99f0
+                @test C[[1, 4, 7]] == fill(99f0, 3)
+                # the values must fit the selection before anything is written:
+                cbefore = C[:]
+                @test_throws DimensionMismatch C[[2, 5, 8]] = Float32[1, 2]
+                @test_throws DimensionMismatch C[[2, 5, 8]] = Float32[1, 2, 3, 4]
+                @test C[:] == cbefore
+                # an empty selection writes nothing:
+                C[falses(12)] = Float32[]
+                C[Int[]] = Float32[]
+                @test C[:] == cbefore
+                # values of another shape fit when their number does, as in Base:
+                C[1:4] = reshape(cbefore[1:4], 2, 2)
+                @test C[:] == cbefore
+                # values are taken in the order of the selection, whatever its shape:
+                C[reshape([8, 11, 2, 5], 2, 2)] = Float32[11, 12, 13, 14]
+                @test C[[8, 11, 2, 5]] == Float32[11, 12, 13, 14]
             end
         end
     end

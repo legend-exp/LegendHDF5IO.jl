@@ -14,8 +14,9 @@ on-disk array (which requires it to be chunked); data is always appended
 along the last dimension.
 
 `LH5Array` implements the [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl)
-interface: views, iteration and reductions read the data block-wise, and
-broadcasts are lazy.
+interface: views, iteration and reductions read the data block-wise,
+broadcasts are lazy, and `setindex!` writes back into the dataset within its
+current size.
 
 # Default constructors
 
@@ -578,6 +579,78 @@ function DiskArrays.readblock!(lh::LH5Array{T, N}, aout, r::Vararg{AbstractUnitR
     aout .= lh[map(UnitRange{Int}, r)...]
     nothing
 end
+
+# Writing back into the dataset, which DiskArrays turns into setindex!,
+# broadcast assignment and copyto!. Growing a dataset is append!'s job, so
+# writes stay within the current size:
+function DiskArrays.writeblock!(lh::LH5Array{T, N}, v::AbstractArray,
+    r::Vararg{AbstractUnitRange, N}
+) where {T, N}
+    # DiskArrays bounds-checks reads but not writes:
+    checkbounds(lh, r...)
+    lh.file[map(UnitRange{Int}, r)...] = _ustrip(convert(Array{T, N}, v))
+    nothing
+end
+
+# Every write, direct, through a view or by broadcast assignment, passes
+# through setindex_disk! of the array or of the view. DiskArrays checks bounds
+# and the number of values block by block, after earlier blocks were written,
+# and reads a block before writing part of it only when the indices are sparse
+# over their span. Repeated indices inflate that density, so the elements
+# between them would be written back uninitialized:
+const LH5DiskArray = Union{LH5Array, DiskArrays.SubDiskArray{<:Any, <:Any, <:LH5Array}}
+
+function DiskArrays.setindex_disk!(a::LH5DiskArray, v::AbstractArray, idxs...)
+    inds = to_indices(a, idxs)
+    checkbounds(a, inds...)
+    n = prod(map(length, inds))
+    length(v) == n || throw(DimensionMismatch("Cannot assign $(length(v)) values to $n elements"))
+    any(_has_repeated_indices, inds) && throw(ArgumentError(
+        "Repeated indices are not supported in writes"))
+    # DiskArrays cannot plan a write without elements:
+    n == 0 && return v
+    # and indexes the values like the selection, so they take its shape:
+    shape = mapreduce(size, (s, t) -> (s..., t...), inds; init = ())
+    invoke(DiskArrays.setindex_disk!, Tuple{AbstractArray, AbstractArray, Vararg{Any}},
+        a, reshape(v, shape), idxs...)
+    v
+end
+
+_has_repeated_indices(i) = false
+_has_repeated_indices(i::AbstractArray{<:Union{Integer, CartesianIndex}}) = !allunique(i)
+_has_repeated_indices(::Union{AbstractRange, Base.LogicalIndex}) = false
+
+# DiskArrays batches writes into a view chunk by chunk, so repeated parent
+# indices must be rejected before the first chunk is written:
+const LH5SubDiskArray{T, N} = DiskArrays.SubDiskArray{T, N, <:LH5Array}
+
+function _check_view_indices(a::LH5SubDiskArray)
+    any(_has_repeated_indices, parentindices(a)) && throw(ArgumentError(
+        "Repeated indices are not supported in writes"))
+end
+
+function Base.copyto!(dest::LH5SubDiskArray, bc::Base.Broadcast.Broadcasted{Nothing})
+    _check_view_indices(dest)
+    invoke(copyto!, Tuple{DiskArrays.AbstractDiskArray, Base.Broadcast.Broadcasted{Nothing}}, dest, bc)
+end
+function Base.fill!(dest::LH5SubDiskArray, v)
+    _check_view_indices(dest)
+    invoke(fill!, Tuple{DiskArrays.AbstractDiskArray, Any}, dest, v)
+end
+# copyto! into a disk array funnels through _disk_copyto!, which has methods
+# with and without matching dimensions:
+function DiskArrays._disk_copyto!(dest::LH5SubDiskArray{<:Any, N}, src::AbstractArray{<:Any, N}) where {N}
+    _check_view_indices(dest)
+    invoke(DiskArrays._disk_copyto!, Tuple{AbstractArray{<:Any, N}, AbstractArray{<:Any, N}}, dest, src)
+end
+function DiskArrays._disk_copyto!(dest::LH5SubDiskArray, src::AbstractArray)
+    _check_view_indices(dest)
+    invoke(DiskArrays._disk_copyto!, Tuple{AbstractArray, AbstractArray}, dest, src)
+end
+
+# Resolves the ambiguity with EncodedArrays' setindex! for whole-array writes:
+Base.setindex!(lh::LH5Array{T, 1}, v::EncodedArray, ::Colon) where {T} =
+    invoke(setindex!, Tuple{DiskArrays.AbstractDiskArray, AbstractArray, Vararg{Any}}, lh, v, Colon())
 
 DiskArrays.haschunks(lh::LH5Array) =
     isnothing(_chunk_dims(lh.file)) ? DiskArrays.Unchunked() : DiskArrays.Chunked()
