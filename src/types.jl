@@ -15,8 +15,8 @@ along the last dimension.
 
 `LH5Array` implements the [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl)
 interface: views, iteration and reductions read the data block-wise,
-broadcasts are lazy, and `setindex!` writes back into the dataset within
-its current size.
+broadcasts are lazy, and `setindex!` writes back into the dataset within its
+current size.
 
 # Default constructors
 
