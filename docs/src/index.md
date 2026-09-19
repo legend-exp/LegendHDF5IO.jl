@@ -32,8 +32,10 @@ Datasets are wrapped as lazy [`LH5Array`](@ref)s, so slicing reads only the
 requested part of the data from disk. `LH5Array` implements the
 [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl) interface: views,
 iteration and reductions like `sum` read the data block by block, and
-broadcasts over `LH5Array`s are lazy, evaluated chunk-wise when collected or
-written. Datasets opened for writing can be modified in place within their
+broadcasts over `LH5Array`s and `map` on them are lazy, evaluated chunk-wise
+when collected or written, so selecting columns with
+[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) does not
+read any data. Datasets opened for writing can be modified in place within their
 current size (`E[1:10] = ...`); `append!` grows them. Nested structures (`NamedTuple`s, tables, waveforms) are represented
 as HDF5 groups.
 

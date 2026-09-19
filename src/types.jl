@@ -15,8 +15,8 @@ along the last dimension.
 
 `LH5Array` implements the [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl)
 interface: views, iteration and reductions read the data block-wise,
-broadcasts are lazy, and `setindex!` writes back into the dataset within
-its current size.
+broadcasts and `map` are lazy, and `setindex!` writes back into the dataset
+within its current size.
 
 # Default constructors
 
@@ -551,6 +551,11 @@ function DiskArrays.readblock!(lh::LH5Array{T, N}, aout, r::Vararg{AbstractUnitR
     aout .= lh[map(UnitRange{Int}, r)...]
     nothing
 end
+
+# Broadcasts over disk-backed arrays are lazy, and map is the same
+# operation spelled differently, so it is lazy as well. Reductions stay
+# eager, and collect or readdata materialize:
+Base.map(f, lh::LH5Array) = f.(lh)
 
 # Writing back into the dataset, which DiskArrays turns into setindex!,
 # broadcast assignment and copyto!. Growing a dataset is append!'s job, so

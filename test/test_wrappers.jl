@@ -247,6 +247,10 @@ using Unitful
                 bc = X .* 2
                 @test bc isa DiskArrays.AbstractDiskArray
                 @test collect(bc) == x * 2u"keV"
+                # map is lazy, like broadcast:
+                m = map(v -> 2v, X)
+                @test m isa DiskArrays.AbstractDiskArray
+                @test collect(m) == x * 2u"keV"
                 # Explicit reads stay eager and type-stable:
                 @test @inferred(X[1:10]) == x[1:10] * u"keV"
                 @test @inferred(X[[1, 5, 40_000]]) == x[[1, 5, 40_000]] * u"keV"
