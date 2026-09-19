@@ -14,8 +14,9 @@ on-disk array (which requires it to be chunked); data is always appended
 along the last dimension.
 
 `LH5Array` implements the [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl)
-interface: views, iteration and reductions read the data block-wise, and
-broadcasts are lazy.
+interface: views, iteration and reductions read the data block-wise,
+broadcasts are lazy, and `setindex!` writes back into the dataset within
+its current size.
 
 # Default constructors
 
@@ -540,6 +541,18 @@ end
 
 function DiskArrays.readblock!(lh::LH5Array{T, N}, aout, r::Vararg{AbstractUnitRange, N}) where {T, N}
     aout .= lh[map(UnitRange{Int}, r)...]
+    nothing
+end
+
+# Writing back into the dataset, which DiskArrays turns into setindex!,
+# broadcast assignment and copyto!. Growing a dataset is append!'s job, so
+# writes stay within the current size:
+function DiskArrays.writeblock!(lh::LH5Array{T, N}, v::AbstractArray,
+    r::Vararg{AbstractUnitRange, N}
+) where {T, N}
+    # DiskArrays bounds-checks reads but not writes:
+    checkbounds(lh, r...)
+    lh.file[map(UnitRange{Int}, r)...] = _ustrip(convert(Array{T, N}, v))
     nothing
 end
 

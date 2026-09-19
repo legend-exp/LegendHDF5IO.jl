@@ -277,6 +277,39 @@ using Unitful
         end
     end
 
+    @testset verbose=true "in-place writes" begin
+        mktempdir(pwd()) do tmp
+            path = joinpath(tmp, "write.lh5")
+            lh5open(path, "cw") do lhd
+                lhd["x"] = rand(Float32, 100) * u"keV"
+                lhd["b"] = rand(Bool, 20)
+                lhd["wf"] = VectorOfSimilarVectors(rand(UInt16, 10, 30))
+            end
+            lh5open(path, "r+") do lhd
+                X, B, W = lhd["x"], lhd["b"], lhd["wf"]
+                X[1:3] = Float32[1, 2, 3] * u"keV"
+                @test X[1:3] == Float32[1, 2, 3] * u"keV"
+                # values in a compatible unit are converted:
+                X[4] = 5000f0 * u"eV"
+                @test X[4] == 5f0 * u"keV"
+                X[10:20] .= 0f0 * u"keV"
+                @test all(iszero, X[10:20])
+                copyto!(view(X, 30:39), fill(7f0 * u"keV", 10))
+                @test all(==(7f0 * u"keV"), X[30:39])
+                B[1:2] = [true, false]
+                @test B[1:2] == [true, false]
+                W.data[:, 2] = fill(0x0007, 10)
+                @test W[2] == fill(0x0007, 10)
+                @test_throws Unitful.DimensionError X[5] = 1f0
+                @test_throws BoundsError X[101:102] = Float32[0, 0] * u"keV"
+            end
+            lh5open(path) do lhd
+                @test lhd["x"][1:3] == Float32[1, 2, 3] * u"keV"
+                @test lhd["wf"][2] == fill(0x0007, 10)
+            end
+        end
+    end
+
     @testset verbose=true "compressed writing" begin
         mktempdir(pwd()) do tmp
             for mode in (:zstd, :deflate)
