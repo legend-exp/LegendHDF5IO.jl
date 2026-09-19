@@ -343,23 +343,25 @@ _select_lastdim(A::AbstractArray{<:Any, K}, i) where {K} =
 function _getindex_scattered_lastdim(
     lh::LH5Array{T, N}, front::NTuple{M, Any}, ilast::AbstractVector{<:Integer}
 ) where {T, N, M}
-    issorted(ilast) && return _getindex_scattered_sorted(lh, front, ilast)
-    p = sortperm(ilast)
-    _select_lastdim(_getindex_scattered_sorted(lh, front, ilast[p]), invperm(p))
-end
-
-function _getindex_scattered_sorted(
-    lh::LH5Array{T, N}, front::NTuple{M, Any}, ilast::AbstractVector{<:Integer}
-) where {T, N, M}
     isempty(ilast) && return lh[front..., 1:0]
-    lo, hi = Int(first(ilast)), Int(last(ilast))
+    lo, hi = Int.(extrema(ilast))
     span = hi - lo + 1
     row_bytes = sizeof(T) * prod(Base.front(size(lh)))
     # For small or densely covered index spans a single bounding read is
-    # cheaper than any scattered read:
+    # cheaper than any scattered read, and gathers from it in any index order:
     if span * row_bytes <= _scatter_bulk_max_bytes || 4 * length(ilast) >= span
         return _select_lastdim(lh[front..., lo:hi], ilast .- (lo - 1))
     end
+    # HDF5 reads selections in index order, so the scattered paths need
+    # sorted indices:
+    issorted(ilast) && return _getindex_scattered_sparse(lh, front, ilast)
+    p = sortperm(ilast)
+    _select_lastdim(_getindex_scattered_sparse(lh, front, ilast[p]), invperm(p))
+end
+
+function _getindex_scattered_sparse(
+    lh::LH5Array{T, N}, front::NTuple{M, Any}, ilast::AbstractVector{<:Integer}
+) where {T, N, M}
     # Point selections beat per-run reads for vectors of any layout, hyperslab
     # unions only for contiguous-layout datasets (libhdf5 maps large irregular
     # selections onto chunks slowly, while sorted per-run reads make good use
