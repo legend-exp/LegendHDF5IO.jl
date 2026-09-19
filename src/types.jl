@@ -288,7 +288,14 @@ end
     end
 end
 
-Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
+# All reads go through one Base method and dispatch internally on the
+# element type and the kind of index:
+
+Base.getindex(lh::LH5Array{T, N},
+    idxs::Vararg{Union{HDF5.IndexType, AbstractVector{<:Integer}}, N}
+) where {T, N} = _getindex_impl(lh, idxs...)
+
+_getindex_impl(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
     dtype = HDF5.datatype(lh.file)
     val = try
@@ -299,7 +306,8 @@ Base.getindex(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
     _read_result(val, T, idxs...)
 end
 
-Base.getindex(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
+# Bool datasets are stored as UInt8 for h5py compatibility:
+_getindex_impl(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {N} = begin
     dtype = HDF5.datatype(lh.file)
     val = try
@@ -519,7 +527,7 @@ function _read_selection(ds::HDF5.Dataset, ::Type{T}, fspace::HDF5.Dataspace,
     end
 end
 
-Base.getindex(lh::LH5Array{T, N},
+_getindex_impl(lh::LH5Array{T, N},
     idxs::Vararg{Union{HDF5.IndexType, AbstractVector{<:Integer}}, N}
 ) where {T, N} = begin
     front, ilast = Base.front(idxs), idxs[end]
@@ -599,10 +607,13 @@ _materialize(A::VectorOfEncodedSimilarArrays{T}) where {T} =
 @inline _ustrip(x::AbstractArray{T}) where T<:Quantity = 
     reinterpret(Unitful.numtype(T), x) 
 
-Base.append!(dest::LH5Array{T, 1}, src::EncodedArray) where {T} =
-    append!(dest, collect(src))
+_append_impl!(dest::LH5Array{T, 1}, src::EncodedArray) where {T} =
+    _append_impl!(dest, collect(src))
 
-Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
+Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} =
+    _append_impl!(dest, src)
+
+_append_impl!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
     x = convert(Array{T, N}, src)
     old_size = size(dest)
     new_size = (old_size[1:N-1]..., old_size[N] + size(src, N))
@@ -613,7 +624,9 @@ Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
     dest
 end
 
-Base.append!(dest::LH5VoV, src::VectorOfVectors) = begin
+Base.append!(dest::LH5VoV, src::VectorOfVectors) = _append_impl!(dest, src)
+
+_append_impl!(dest::LH5VoV, src::VectorOfVectors) = begin
     if !isempty(src)
         src_flat = src.data[first(src.elem_ptr):(last(src.elem_ptr) - 1)]
         old_len = last(dest.elem_ptr) - first(dest.elem_ptr)
@@ -637,9 +650,11 @@ end
 Base.getindex(A::LH5Table, idxs::Union{AbstractVector, Colon}) =
     StructArray(map(col -> col[idxs], StructArrays.components(A)))
 
+Base.append!(dest::LH5Table, src) = _append_impl!(dest, src)
+
 # StructArrays appends column-wise only when the element types of both
 # tables match exactly, which disk-backed and in-memory tables rarely do:
-function _append_table!(dest, src)
+function _append_impl!(dest::LH5Table, src)
     dcols = StructArrays.components(dest)
     scols = Tables.columntable(src)
     issetequal(keys(dcols), keys(scols)) || throw(ArgumentError(
@@ -650,16 +665,20 @@ function _append_table!(dest, src)
     dest
 end
 
-Base.append!(dest::LH5Table, src) = _append_table!(dest, src)
-
-# Disambiguation against the column-wise append of StructArrays and the
-# element append of EncodedArrays:
-Base.append!(dest::StructArrays.StructVector{T, <:LH5TableColumns},
-    src::StructArrays.StructVector{T}) where {T<:NamedTuple} = _append_table!(dest, src)
-Base.append!(dest::LH5Table, src::EncodedArray) =
+_append_impl!(dest::LH5Table, src::EncodedArray) =
     throw(ArgumentError("Cannot append an encoded array to a table"))
 
-Base.append!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
+# These claim no new behaviour, they only resolve the signatures that the
+# append! methods of EncodedArrays and StructArrays would make ambiguous:
+Base.append!(dest::LH5Array{T, 1}, src::EncodedArray) where {T} = _append_impl!(dest, src)
+Base.append!(dest::LH5Table, src::EncodedArray) = _append_impl!(dest, src)
+Base.append!(dest::StructArrays.StructVector{T, <:LH5TableColumns},
+    src::StructArrays.StructVector{T}) where {T<:NamedTuple} = _append_impl!(dest, src)
+
+Base.append!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) =
+    _append_impl!(dest, src)
+
+_append_impl!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
     # first append values to on-disk array
     StructArrays.foreachfield(append!, dest, src)
 
