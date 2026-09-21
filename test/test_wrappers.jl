@@ -12,6 +12,7 @@ using RadiationDetectorSignals
 using StaticArrays
 using StatsBase
 using StructArrays
+using Tables
 using Unitful
 
 @testset verbose=true "test wrapper" begin
@@ -399,6 +400,31 @@ using Unitful
                     lhd["waveform"] = waveform
                     @test append!(lhd["waveform"], waveform)[:] == new_waveform
                 end
+                @testset "append through a lazy table after column changes" begin
+                    lhd["tbl_cols"] = StructArray((a = [1, 2], b = [3, 4]))
+                    t = lhd["tbl_cols"]
+                    t[:]  # opens and caches the columns
+                    delete_entry!(lhd, "tbl_cols/b")
+                    add_entries!(lhd, "tbl_cols", StructArray((b = [30, 40],)))
+                    append!(t, StructArray((a = [5], b = [50])))
+                    @test lhd["tbl_cols"][:] == StructArray((a = [1, 2, 5], b = [30, 40, 50]))
+                    @test t[:] == lhd["tbl_cols"][:]
+                    lhd["tbl_vov"] = StructArray((v = VectorOfVectors([[1], [2, 3]]),))
+                    orig = lhd["tbl_vov"]
+                    orig[:]
+                    append!(lhd["tbl_vov"], StructArray((v = VectorOfVectors([[4, 5]]),)))
+                    append!(orig, StructArray((v = VectorOfVectors([[6, 7]]),)))
+                    @test lhd["tbl_vov"][:] == StructArray((v = VectorOfVectors([[1], [2, 3], [4, 5], [6, 7]]),))
+                end
+                @testset "append through a stale handle" begin
+                    tbl = StructArray((x = [1, 2], y = [3, 4]))
+                    lhd["tbl_stale"] = tbl
+                    stale = lhd["tbl_stale"]
+                    add_entries!(lhd, "tbl_stale", StructArray((z = [5, 6],)))
+                    # the handle does not know column z, appending through it would corrupt the table:
+                    @test_throws ArgumentError append!(stale, tbl)
+                    @test lhd["tbl_stale"][:] == StructArray((x = [1, 2], y = [3, 4], z = [5, 6]))
+                end
             end
         end
     end
@@ -437,6 +463,143 @@ using Unitful
                     @test_throws ArgumentError delete_entry!(lhd, "nt/x")
                     @test_throws DimensionMismatch add_entries!(lhd, "tbl", StructArray((z = rand(3),)))
                 end
+            end
+        end
+    end
+    @testset "lazy tables" begin
+        mktempdir() do dir
+            fn = joinpath(dir, "lazy.lh5")
+            n = 64
+            a = rand(Float32, n)
+            b = rand(Int32, n)
+            vov = VectorOfVectors([rand(Float32, 3) for _ in 1:n])
+            sv = [SVector(1.0, 2.0) * i for i in 1:n]
+            lh5open(fn, "w") do lhd
+                lhd["tbl"] = StructArray((a = a, b = b, vov = vov))
+                # a table of tables, and one mixing eagerly read and disk-backed columns:
+                lhd["nested"] = StructArray((x = StructArray((a = a,)), y = StructArray((b = b, vov = vov))))
+                lhd["mixed"] = StructArray((sv = sv, vov = vov))
+            end
+
+            opened(tbl) = keys(LegendHDF5IO._table_columns(tbl))
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                @test tbl isa LH5LazyTable
+                # opening the table must not open any column:
+                @test isempty(opened(tbl))
+                @test propertynames(tbl) == (:a, :b, :vov)
+                @test hasproperty(tbl, :a) && !hasproperty(tbl, :nope)
+
+                @test tbl.a[:] == a
+                @test Set(opened(tbl)) == Set([:a])
+                @test tbl.b[:] == b
+                @test tbl.vov[:] == vov
+                @test Set(opened(tbl)) == Set([:a, :b, :vov])
+                @test_throws ArgumentError tbl.nope
+            end
+
+            fn_wide = joinpath(dir, "wide.lh5")
+            names = Tuple(Symbol.("c", 1:32))
+            lh5open(fn_wide, "cw") do lhd
+                lhd["wide"] = StructArray(NamedTuple{names}(ntuple(i -> fill(i, 8), 32)))
+            end
+            lh5open(fn_wide, "r") do lhd
+                # columns opened concurrently all end up in the cache, once each:
+                tbl = lhd["wide"]
+                @sync for name in names
+                    Threads.@spawn getproperty(tbl, name)
+                end
+                @test Set(opened(tbl)) == Set(names)
+                @test all(getproperty(tbl, names[i])[:] == fill(i, 8) for i in 1:32)
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                @test length(tbl) == n
+                # the row count needs one column, not all of them:
+                @test length(opened(tbl)) == 1
+                @test size(tbl) == (n,)
+                @test !isempty(tbl)
+                @test firstindex(tbl) == 1 && lastindex(tbl) == n
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                str = sprint(show, tbl)
+                @test occursin("3 columns", str)
+                @test all(name -> occursin(name, str), ("a", "b", "vov"))
+                @test sprint(show, MIME"text/plain"(), tbl) == str
+                # showing a table must not open any of its columns:
+                @test isempty(opened(tbl))
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                @test Tables.istable(tbl)
+                @test Tables.columnaccess(tbl)
+                @test Tables.columnnames(tbl) == (:a, :b, :vov)
+                @test Tables.getcolumn(tbl, :a)[:] == a
+                @test Tables.getcolumn(tbl, 2)[:] == b
+                # the column types are only known once columns are opened:
+                @test isnothing(Tables.schema(tbl))
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                # selecting columns must not open the ones it skipped:
+                sel = map(name -> Tables.getcolumn(tbl, name), (:a, :b))
+                @test sel[1][:] == a
+                @test Set(opened(tbl)) == Set([:a, :b])
+                @test length(Tables.columntable(tbl)) == 3
+                @test Set(opened(tbl)) == Set([:a, :b, :vov])
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                typed = StructArray(tbl)
+                @test typed isa LegendHDF5IO.LH5Table
+                # repeated conversion must reuse the same table:
+                @test StructArray(tbl) === typed
+                @test tbl[1:4].a == a[1:4]
+                @test collect(tbl.a[1:4]) == a[1:4]
+                @test (x -> 2x).(tbl.a) == 2 .* a
+                @test first(tbl).a == a[1]
+                @test tbl == typed
+                # keys, eachindex and pairs index rows, as iteration does:
+                @test keys(tbl) == 1:n
+                @test [tbl[i] for i in eachindex(tbl)] == collect(tbl)
+                @test length(collect(pairs(tbl))) == n
+            end
+
+            lh5open(fn, "r") do lhd
+                nested = lhd["nested"]
+                @test nested.y isa LH5LazyTable
+                @test StructArray(nested)[1:3].y.vov == vov[1:3]
+                @test nested[2].y.b == b[2]
+                @test readdata(lhd.data_store, "nested").x.a == a
+                # slices rebuild the row type from the sliced columns:
+                mixed = lhd["mixed"]
+                rows = mixed[1:3]
+                @test rows[2].vov == vov[2]
+                @test rows.sv == sv[1:3]
+                @test mixed[[1, n]].vov == vov[[1, n]]
+            end
+
+            # readdata and writing a lazy table back out:
+            lh5open(fn, "r") do lhd
+                eager = readdata(lhd.data_store, "tbl")
+                @test eager isa StructVector
+                @test eager.a == a && eager.vov == vov
+            end
+            lh5open(joinpath(dir, "copy.lh5"), "w") do dest
+                lh5open(fn, "r") do src
+                    dest["tbl"] = src["tbl"]
+                end
+            end
+            lh5open(joinpath(dir, "copy.lh5"), "r") do lhd
+                @test lhd["tbl"].a[:] == a
+                @test lhd["tbl"].vov[:] == vov
             end
         end
     end
