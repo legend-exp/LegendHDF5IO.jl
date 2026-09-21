@@ -42,8 +42,13 @@ as HDF5 groups.
 ### Tables and waveforms
 
 Tables and vectors of `RDWaveform`s round-trip through their LH5
-representation. Tables are read as `StructArray`s of `NamedTuple` rows;
-anything satisfying the Tables.jl column interface can be written:
+representation. Tables are read as [`LH5LazyTable`](@ref)s, which open a
+column when it is accessed and not before, so reading a few columns of a
+wide table costs a few reads instead of one per column. They satisfy the
+Tables.jl column interface, and treating one as an array (broadcasting,
+indexing, iteration) converts it to a `StructArray` of `NamedTuple` rows
+over all columns. Anything satisfying the Tables.jl column interface can
+be written:
 
 ```julia
 using StructArrays, ArraysOfArrays, RadiationDetectorSignals

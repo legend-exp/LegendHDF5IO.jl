@@ -1,6 +1,6 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
-export LHDataStore, LH5Array
+export LHDataStore, LH5Array, LH5LazyTable
 
 """
     LH5Array{T, N} <: AbstractArray{T, N}
@@ -134,10 +134,10 @@ LH5Array(ds::HDF5.H5DataStore, ::Type{<:NamedTuple{T}}) where {T} =
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:StructArray{<:NamedTuple{(T)}}}) where T
 
-return a `StructArray` where each column is the output of `LH5Array` applied to it.
+return an `LH5LazyTable` that opens the columns named in `T` on demand.
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:StructArray{<:NamedTuple{(T)}}}) where T =
-    StructArray(LH5Array(ds, NamedTuple{T}))
+    _lazy_table(ds, T)
 """
     LH5Array(ds::HDF5.DataStore, ::Type{<:AbstractVector{<:RDWaveform}})
 
@@ -146,7 +146,7 @@ return an `ArrayOfRDWaveforms` where the field `signal` is either a
 with an `LH5Array` as `data` (see `ArrayOfRDWaveforms` and `ArraysOfArrays`) 
 """
 LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractVector{<:RDWaveform}}) = begin
-    tbl = LH5Array(ds, StructArray{<:NamedTuple{(:t0, :dt, :values)}})
+    tbl = StructArray(LH5Array(ds, NamedTuple{(:t0, :dt, :values)}))
     from_table(tbl, AbstractVector{<:RDWaveform})
 end
 """
@@ -630,6 +630,7 @@ _materialize(A::LH5AoSA{T, M}) where {T, M} =
 _materialize(x::NamedTuple) = map(_materialize, x)
 _materialize(A::StructArray{<:NamedTuple}) =
     StructArray(map(_materialize, StructArrays.components(A)))
+_materialize(tbl::LH5LazyTable) = _materialize(_typed_table(tbl))
 _materialize(A::ArrayOfRDWaveforms) =
     ArrayOfRDWaveforms((_materialize(A.time), _materialize(A.signal)))
 _materialize(A::VectorOfEncodedArrays{T}) where {T} =
@@ -685,6 +686,7 @@ Base.getindex(A::LH5Table, idxs::Union{AbstractVector, Colon}) =
     StructArray(map(col -> col[idxs], StructArrays.components(A)))
 
 Base.append!(dest::LH5Table, src) = _append_impl!(dest, src)
+Base.append!(dest::LH5LazyTable, src) = (_append_impl!(_typed_table(dest), src); dest)
 
 # StructArrays appends column-wise only when the element types of both
 # tables match exactly, which disk-backed and in-memory tables rarely do:
@@ -1159,9 +1161,12 @@ end
 
 extend the table `dest` at `lhd[i]` with columns from `src`.
 """
+add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray{<:NamedTuple},
+    dest::LH5LazyTable) = add_entries!(lhd, i, src, _typed_table(dest))
+
 function add_entries!(lhd::LHDataStore, i::AbstractString,
     src::StructArray{<:NamedTuple},
-    dest::StructArray{<:NamedTuple} = LH5Array(lhd.data_store[i]))
+    dest::StructArray{<:NamedTuple} = _typed_table(LH5Array(lhd.data_store[i])))
 
     length(dest) == length(src) || throw(DimensionMismatch(
         "Cannot add columns of length $(length(src)) to table of length $(length(dest))"))
@@ -1218,6 +1223,9 @@ function _delete_entry(lhd::LHDataStore, nt::NamedTuple,
     HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
     nothing
 end
+
+_delete_entry(lhd::LHDataStore, tbl::LH5LazyTable, parent::AbstractString,
+    child::AbstractString) = _delete_entry(lhd, _typed_table(tbl), parent, child)
 
 function _delete_entry(lhd::LHDataStore, tbl::StructArray{<:NamedTuple},
     parent::AbstractString, child::AbstractString)

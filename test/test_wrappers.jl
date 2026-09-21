@@ -12,6 +12,7 @@ using RadiationDetectorSignals
 using StaticArrays
 using StatsBase
 using StructArrays
+using Tables
 using Unitful
 
 @testset verbose=true "test wrapper" begin
@@ -434,6 +435,107 @@ using Unitful
                     @test_throws ArgumentError delete_entry!(lhd, "nt/x")
                     @test_throws DimensionMismatch add_entries!(lhd, "tbl", StructArray((z = rand(3),)))
                 end
+            end
+        end
+    end
+    @testset "lazy tables" begin
+        mktempdir() do dir
+            fn = joinpath(dir, "lazy.lh5")
+            n = 64
+            a = rand(Float32, n)
+            b = rand(Int32, n)
+            vov = VectorOfVectors([rand(Float32, 3) for _ in 1:n])
+            lh5open(fn, "w") do lhd
+                lhd["tbl"] = StructArray((a = a, b = b, vov = vov))
+            end
+
+            opened(tbl) = keys(LegendHDF5IO._table_columns(tbl))
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                @test tbl isa LH5LazyTable
+                # opening the table must not open any column:
+                @test isempty(opened(tbl))
+                @test propertynames(tbl) == (:a, :b, :vov)
+                @test keys(tbl) == (:a, :b, :vov)
+                @test haskey(tbl, :a) && haskey(tbl, "a") && !haskey(tbl, :nope)
+
+                @test tbl.a[:] == a
+                @test Set(opened(tbl)) == Set([:a])
+                @test tbl.b[:] == b
+                @test tbl.vov[:] == vov
+                @test Set(opened(tbl)) == Set([:a, :b, :vov])
+                @test_throws ArgumentError tbl.nope
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                @test length(tbl) == n
+                # the row count needs one column, not all of them:
+                @test length(opened(tbl)) == 1
+                @test size(tbl) == (n,)
+                @test !isempty(tbl)
+                @test firstindex(tbl) == 1 && lastindex(tbl) == n
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                str = sprint(show, tbl)
+                @test occursin("3 columns", str)
+                @test all(name -> occursin(name, str), ("a", "b", "vov"))
+                @test sprint(show, MIME"text/plain"(), tbl) == str
+                # showing a table must not open any of its columns:
+                @test isempty(opened(tbl))
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                @test Tables.istable(tbl)
+                @test Tables.columnaccess(tbl)
+                @test Tables.columnnames(tbl) == (:a, :b, :vov)
+                @test Tables.getcolumn(tbl, :a)[:] == a
+                @test Tables.getcolumn(tbl, 2)[:] == b
+                # the column types are only known once columns are opened:
+                @test isnothing(Tables.schema(tbl))
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                # selecting columns must not open the ones it skipped:
+                sel = map(name -> Tables.getcolumn(tbl, name), (:a, :b))
+                @test sel[1][:] == a
+                @test Set(opened(tbl)) == Set([:a, :b])
+                @test length(Tables.columntable(tbl)) == 3
+                @test Set(opened(tbl)) == Set([:a, :b, :vov])
+            end
+
+            lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                typed = StructArray(tbl)
+                @test typed isa LegendHDF5IO.LH5Table
+                # repeated conversion must reuse the same table:
+                @test StructArray(tbl) === typed
+                @test tbl[1:4].a == a[1:4]
+                @test collect(tbl.a[1:4]) == a[1:4]
+                @test (x -> 2x).(tbl.a) == 2 .* a
+                @test first(tbl).a == a[1]
+                @test tbl == typed
+            end
+
+            # readdata and writing a lazy table back out:
+            lh5open(fn, "r") do lhd
+                eager = readdata(lhd.data_store, "tbl")
+                @test eager isa StructVector
+                @test eager.a == a && eager.vov == vov
+            end
+            lh5open(joinpath(dir, "copy.lh5"), "w") do dest
+                lh5open(fn, "r") do src
+                    dest["tbl"] = src["tbl"]
+                end
+            end
+            lh5open(joinpath(dir, "copy.lh5"), "r") do lhd
+                @test lhd["tbl"].a[:] == a
+                @test lhd["tbl"].vov[:] == vov
             end
         end
     end
