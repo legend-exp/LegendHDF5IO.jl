@@ -42,8 +42,13 @@ as HDF5 groups.
 ### Tables and waveforms
 
 Tables and vectors of `RDWaveform`s round-trip through their LH5
-representation. Tables are read as `StructArray`s of `NamedTuple` rows;
-anything satisfying the Tables.jl column interface can be written:
+representation. Tables are read as [`LH5LazyTable`](@ref)s, which open a
+column when it is accessed and not before, so reading a few columns of a
+wide table costs a few reads instead of one per column. They satisfy the
+Tables.jl column interface, and treating one as an array (broadcasting,
+indexing, iteration) converts it to a `StructArray` of `NamedTuple` rows
+over all columns. Anything satisfying the Tables.jl column interface can
+be written:
 
 ```julia
 using StructArrays, ArraysOfArrays, RadiationDetectorSignals
@@ -65,8 +70,11 @@ lh5open("events.lh5", "cw") do lhd
 end
 ```
 
-Reading `lhd["evt"]` returns a `StructArray` whose columns are disk-backed;
-use `lhd["evt"][:]` or index with a range to materialize rows.
+Reading `lhd["evt"]` returns an `LH5LazyTable`; `lhd["evt"][:]`, or indexing
+with a range, reads the rows into a `StructArray`. A table handle keeps the
+column list it was opened with: columns added or removed through other handles
+are not seen by its reads, and `append!` through it refuses with an error.
+Lazy tables cannot be concatenated with `vcat`; read them first.
 
 Scattered reads either read the whole index span the events cover, or the
 events themselves. The thresholds for that choice,
