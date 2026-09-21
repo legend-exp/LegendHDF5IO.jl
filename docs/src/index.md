@@ -68,6 +68,13 @@ end
 Reading `lhd["evt"]` returns a `StructArray` whose columns are disk-backed;
 use `lhd["evt"][:]` or index with a range to materialize rows.
 
+Scattered reads either read the whole index span the events cover, or the
+events themselves. The thresholds for that choice,
+[`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) and
+[`LegendHDF5IO.scatter_bulk_max_waste`](@ref), default to local storage;
+raise them on filesystems with a high per-operation latency, such as
+cluster filesystems.
+
 ### Appending and compression
 
 Open the file with `usechunks = true` to create extensible datasets, then

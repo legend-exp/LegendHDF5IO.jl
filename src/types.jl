@@ -344,7 +344,34 @@ function _contiguous_runs(idxs::AbstractVector{<:Integer})
     runs
 end
 
-const _scatter_bulk_max_bytes = 2^20
+"""
+    LegendHDF5IO.scatter_bulk_max_bytes[]
+
+Size up to which a scattered read reads the whole index span its events
+cover, instead of reading the events themselves (1 MB by default).
+
+Reading the span costs one read operation, reading the events costs one
+per group of adjacent events. The default suits local storage; on
+filesystems with a high per-operation latency, such as cluster
+filesystems, fewer and larger reads pay off, so raise it there. Can also
+be set per environment as the preference "scatter_bulk_max_bytes".
+
+See also [`LegendHDF5IO.scatter_bulk_max_waste`](@ref).
+"""
+const scatter_bulk_max_bytes = Ref(2^20)
+
+"""
+    LegendHDF5IO.scatter_bulk_max_waste[]
+
+Factor by which a scattered read may exceed the requested amount of data
+when it reads the whole index span its events cover (4 by default).
+
+Densely covered spans are read as a whole however large they are, so
+raising this trades reading more data for fewer read operations. See also
+[`LegendHDF5IO.scatter_bulk_max_bytes`](@ref). Can also be set per
+environment as the preference "scatter_bulk_max_waste".
+"""
+const scatter_bulk_max_waste = Ref(4)
 
 _select_lastdim(A::AbstractArray{<:Any, K}, i) where {K} =
     A[ntuple(_ -> Colon(), Val(K - 1))..., i]
@@ -356,9 +383,11 @@ function _getindex_scattered_lastdim(
     lo, hi = Int.(extrema(ilast))
     span = hi - lo + 1
     row_bytes = sizeof(T) * prod(Base.front(size(lh)))
+    span_bytes = span * row_bytes
     # For small or densely covered index spans a single bounding read is
     # cheaper than any scattered read, and gathers from it in any index order:
-    if span * row_bytes <= _scatter_bulk_max_bytes || 4 * length(ilast) >= span
+    if span_bytes <= scatter_bulk_max_bytes[] ||
+        span_bytes <= scatter_bulk_max_waste[] * length(ilast) * row_bytes
         return _select_lastdim(lh[front..., lo:hi], ilast .- (lo - 1))
     end
     # HDF5 reads selections in index order, so the scattered paths need
