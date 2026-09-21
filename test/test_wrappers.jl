@@ -172,6 +172,24 @@ using Unitful
                 dense_idxs = collect(4:2:1000)
                 @test W[dense_idxs] == VectorOfSimilarVectors(data)[dense_idxs]
 
+                # the bulk/scattered decision is tunable and must not
+                # change what is read:
+                tune = [5, 5, 900, 17, 3]
+                old_max, old_waste = LegendHDF5IO.scatter_bulk_max_bytes[],
+                    LegendHDF5IO.scatter_bulk_max_waste[]
+                try
+                    LegendHDF5IO.scatter_bulk_max_bytes[] = 0
+                    LegendHDF5IO.scatter_bulk_max_waste[] = 0
+                    @test A[tune] == x[tune]
+                    @test W[tune] == VectorOfSimilarVectors(data)[tune]
+                    LegendHDF5IO.scatter_bulk_max_bytes[] = typemax(Int)
+                    @test A[tune] == x[tune]
+                    @test W[tune] == VectorOfSimilarVectors(data)[tune]
+                finally
+                    LegendHDF5IO.scatter_bulk_max_bytes[] = old_max
+                    LegendHDF5IO.scatter_bulk_max_waste[] = old_waste
+                end
+
                 vv = VectorOfVectors([rand(rand(1:20)) for _ in 1:100])
                 lhd["vv"] = vv
                 @test lhd["vv"][[2, 3, 4, 70]] == vv[[2, 3, 4, 70]]
