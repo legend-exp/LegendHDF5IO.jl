@@ -278,6 +278,8 @@ using Unitful
                 lhd["wf"] = VectorOfSimilarVectors(data)
                 lhd["flags"] = flags
                 lhd["strs"] = ["x$i" for i in 1:50]
+                lhd["empty"] = Float32[]
+                lhd["empty2d"] = zeros(Int, 3, 0)
             end
             lh5open(joinpath(dir, "diskarrays_chunked.lh5"), "cw", usechunks = true) do lhd
                 lhd["wf"] = VectorOfSimilarVectors(data)
@@ -330,6 +332,14 @@ using Unitful
                 @test first(S) == "x1"
                 @test collect(view(S, 2:3)) == ["x2", "x3"]
                 @test collect(S .* "!") == ["x$(i)!" for i in 1:50]
+
+                # empty datasets have a valid chunk grid (DiskArrays itself
+                # cannot view, broadcast or reduce empty arrays yet):
+                E = lhd["empty"]
+                @test isempty(DiskArrays.eachchunk(E))
+                @test collect(E) == Float32[]
+                @test isempty(DiskArrays.eachchunk(lhd["empty2d"]))
+                @test collect(lhd["empty2d"]) == zeros(Int, 3, 0)
             end
             lh5open(joinpath(dir, "diskarrays_chunked.lh5")) do lhd
                 W = lhd["wf"].data

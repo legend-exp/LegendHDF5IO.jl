@@ -639,7 +639,9 @@ DiskArrays.haschunks(lh::LH5Array) =
 
 function DiskArrays.eachchunk(lh::LH5Array)
     chunk = _chunk_dims(lh.file)
-    isnothing(chunk) ? DiskArrays.estimate_chunksize(lh) : DiskArrays.GridChunks(lh, chunk)
+    isnothing(chunk) || return DiskArrays.GridChunks(lh, chunk)
+    # DiskArrays cannot estimate a chunk size for an empty array:
+    isempty(lh) ? DiskArrays.GridChunks(lh, max.(size(lh), 1)) : DiskArrays.estimate_chunksize(lh)
 end
 
 Base.size(lh::LH5Array{T, N}) where {T, N} = begin
