@@ -194,6 +194,21 @@ using Unitful
                 vv = VectorOfVectors([rand(rand(1:20)) for _ in 1:100])
                 lhd["vv"] = vv
                 @test lhd["vv"][[2, 3, 4, 70]] == vv[[2, 3, 4, 70]]
+
+                # strings need HDF5's own normalization, whichever read path:
+                strs = ["a", "bb", "ccc", "d"]
+                lhd["strs"] = strs
+                S = lhd["strs"]
+                @test eltype(S) == String
+                @test S[[4, 1, 1]] == strs[[4, 1, 1]]
+                try
+                    LegendHDF5IO.scatter_bulk_max_bytes[] = 0
+                    LegendHDF5IO.scatter_bulk_max_waste[] = 0
+                    @test S[[4, 1, 1]] == strs[[4, 1, 1]]
+                finally
+                    LegendHDF5IO.scatter_bulk_max_bytes[] = old_max
+                    LegendHDF5IO.scatter_bulk_max_waste[] = old_waste
+                end
             end
 
             # sparse index patterns on contiguous-layout data trigger
@@ -248,6 +263,7 @@ using Unitful
                 lhd["x"] = x * u"keV"
                 lhd["wf"] = VectorOfSimilarVectors(data)
                 lhd["flags"] = flags
+                lhd["strs"] = ["x$i" for i in 1:50]
             end
             lh5open(joinpath(dir, "diskarrays_chunked.lh5"), "cw", usechunks = true) do lhd
                 lhd["wf"] = VectorOfSimilarVectors(data)
@@ -289,6 +305,13 @@ using Unitful
                 @test W.data[:, mask[1:3000]] == data[:, mask[1:3000]]
 
                 @test count(lhd["flags"]) == count(flags)
+
+                # string datasets take part in the lazy machinery like any other:
+                S = lhd["strs"]
+                @test eltype(S) == String
+                @test first(S) == "x1"
+                @test collect(view(S, 2:3)) == ["x2", "x3"]
+                @test collect(S .* "!") == ["x$(i)!" for i in 1:50]
             end
             lh5open(joinpath(dir, "diskarrays_chunked.lh5")) do lhd
                 W = lhd["wf"].data
@@ -306,9 +329,13 @@ using Unitful
                 lhd["x"] = rand(Float32, 100) * u"keV"
                 lhd["b"] = rand(Bool, 20)
                 lhd["wf"] = VectorOfSimilarVectors(rand(UInt16, 10, 30))
+                lhd["s"] = ["a", "bb", "ccc"]
             end
             lh5open(path, "r+") do lhd
                 X, B, W = lhd["x"], lhd["b"], lhd["wf"]
+                S = lhd["s"]
+                S[1:2] = ["p", "q"]
+                @test S[:] == ["p", "q", "ccc"]
                 X[1:3] = Float32[1, 2, 3] * u"keV"
                 @test X[1:3] == Float32[1, 2, 3] * u"keV"
                 # values in a compatible unit are converted:
