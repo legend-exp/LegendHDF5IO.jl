@@ -706,13 +706,15 @@ Base.append!(dest::LH5VoV, src::VectorOfVectors) = _append_impl!(dest, src)
 
 _append_impl!(dest::LH5VoV, src::VectorOfVectors) = begin
     if !isempty(src)
-        src_flat = src.data[first(src.elem_ptr):(last(src.elem_ptr) - 1)]
+        src_ptr = ArraysOfArrays.internal_element_ptr(src)
+        src_flat = src.data[first(src_ptr):(last(src_ptr) - 1)]
         old_len = last(dest.elem_ptr) - first(dest.elem_ptr)
+        # Derived from src before dest changes, since src may be dest itself:
+        new_clen = cumsum(diff(src_ptr)) .+ old_len
         append!(dest.data, src_flat)
-        _append_elemptr!(dest.elem_ptr, src.elem_ptr)
+        _append_elemptr!(dest.elem_ptr, src_ptr)
         append!(dest.kernel_size, src.kernel_size)
 
-        new_clen = cumsum(diff(src.elem_ptr)) .+ old_len
         dset = parent(dest.data.file)["cumulative_length"]
         try
             append!(LH5Array(dset), new_clen)

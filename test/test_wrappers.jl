@@ -486,6 +486,18 @@ using Unitful
                     @test_throws ArgumentError append!(stale, tbl)
                     @test lhd["tbl_stale"][:] == StructArray((x = [1, 2], y = [3, 4], z = [5, 6]))
                 end
+                @testset "append to itself" begin
+                    vofv = VectorOfVectors([[1, 2], [3]])
+                    lhd["vofv_self"] = vofv
+                    dest = lhd["vofv_self"]
+                    append!(dest, dest)
+                    @test lhd["vofv_self"][:] == vcat(vofv, vofv)
+                    tbl = StructArray((a = [1, 2], w = vofv))
+                    lhd["tbl_self"] = tbl
+                    t = lhd["tbl_self"]
+                    append!(t, t)
+                    @test lhd["tbl_self"][:] == vcat(tbl, tbl)
+                end
             end
         end
     end
