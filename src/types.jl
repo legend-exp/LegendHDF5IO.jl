@@ -160,10 +160,15 @@ end
 return a `VectorOfVectors` object where `data` is an `LH5Array` 
 (see `VectorOfArrays`)
 """
-LH5Array(ds::HDF5.H5DataStore, 
+LH5Array(ds::HDF5.H5DataStore,
 ::Type{<:AbstractVector{<:AbstractVector}}) = begin
     data = LH5Array(ds["flattened_data"])
-    cumulen = LH5Array(ds["cumulative_length"])[:]
+    clen_ds = ds["cumulative_length"]
+    cumulen = try
+        LH5Array(clen_ds)[:]
+    finally
+        close(clen_ds)
+    end
     VectorOfVectors(data, _element_ptrs(cumulen))
 end
 """

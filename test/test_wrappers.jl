@@ -77,6 +77,12 @@ using Unitful
                         [rand(-5:5, rand(1:100)) for _ in 1:50])
                     @test setindex!(lhd, vofvec, "vofvec") |> isnothing
                     @test lhd["vofvec"][:] == vofvec
+                    # opening a vector of vectors keeps only its data handle open:
+                    n_open() = HDF5.API.h5f_get_obj_count(lhd.data_store.id, HDF5.API.H5F_OBJ_DATASET)
+                    GC.enable(false)
+                    n0 = n_open(); vv = lhd["vofvec"]; n1 = n_open()
+                    GC.enable(true)
+                    @test n1 - n0 == 1
                 end
                 @testset "IO of VectorOfSimilarVectors" begin
                     vofsimvec = convert(VectorOfSimilarVectors,
