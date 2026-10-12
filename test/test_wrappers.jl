@@ -53,6 +53,19 @@ using Unitful
                     dt = HDF5.datatype(lhd.data_store["boolarray"])
                     @test HDF5.API.h5t_get_class(dt.id) == HDF5.API.H5T_INTEGER
                     close(dt)
+                    # Other writers may store bytes other than 0 and 1, which every read path treats as true:
+                    lhd.data_store["boolarray"][:] = UInt8[0, 1, 2, 128, 0, 1, 2, 128, 0, 1]
+                    expected = Bool[0, 1, 1, 1, 0, 1, 1, 1, 0, 1]
+                    @test lhd["boolarray"][:] == expected
+                    @test lhd["boolarray"][3:4] == expected[3:4]
+                    @test Array(lhd["boolarray"]) == expected
+                    saved = LegendHDF5IO.scatter_bulk_max_bytes[], LegendHDF5IO.scatter_bulk_max_waste[]
+                    LegendHDF5IO.scatter_bulk_max_bytes[] = LegendHDF5IO.scatter_bulk_max_waste[] = 0
+                    try
+                        @test lhd["boolarray"][[3, 4, 9]] == expected[[3, 4, 9]]
+                    finally
+                        LegendHDF5IO.scatter_bulk_max_bytes[], LegendHDF5IO.scatter_bulk_max_waste[] = saved
+                    end
                 end
                 @testset "IO of Array{<:Quantity}" begin
                     y = rand(10)*u"mm"
@@ -228,6 +241,7 @@ using Unitful
                 lhd["b"] = b
                 spb = [1, 3, 4, 2^20 + 3]
                 @test lhd["b"][spb] == b[spb]
+                @test lhd["b"][spb] isa BitVector
 
                 data = rand(UInt16, 700, 2000)
                 lhd["aofa"] = VectorOfSimilarVectors(data)
