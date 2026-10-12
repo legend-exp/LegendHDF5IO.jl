@@ -538,6 +538,14 @@ using Unitful
                     lhd["waveform"] = waveform
                     @test append!(lhd["waveform"], waveform)[:] == new_waveform
                 end
+                @testset "append through a stale ragged-array handle" begin
+                    lhd["vofv_stale"] = VectorOfVectors([[1, 2], [3]])
+                    h1, h2 = lhd["vofv_stale"], lhd["vofv_stale"]
+                    append!(h1, VectorOfVectors([[4, 5]]))
+                    # h2 still holds the element pointers from before that append:
+                    @test_throws ArgumentError append!(h2, VectorOfVectors([[6]]))
+                    @test lhd["vofv_stale"][:] == [[1, 2], [3], [4, 5]]
+                end
                 @testset "append through a lazy table after column changes" begin
                     lhd["tbl_cols"] = StructArray((a = [1, 2], b = [3, 4]))
                     t = lhd["tbl_cols"]
@@ -554,6 +562,19 @@ using Unitful
                     append!(orig, StructArray((v = VectorOfVectors([[6, 7]]),)))
                     @test lhd["tbl_vov"][:] == StructArray((v = VectorOfVectors([[1], [2, 3], [4, 5], [6, 7]]),))
                 end
+                @testset "append waveforms to themselves and ragged waveforms" begin
+                    trng = range(0.0u"μs", 10.0u"μs"; length = 4)
+                    wf = ArrayOfRDWaveforms((fill(trng, 2), VectorOfSimilarVectors(rand(UInt16, 4, 2))))
+                    lhd["wf_self"] = wf
+                    w = lhd["wf_self"]
+                    append!(w, w)
+                    @test lhd["wf_self"][:] == vcat(wf, wf)
+                    times = [range(0.0u"μs", 10.0u"μs"; length = n) for n in (3, 5)]
+                    ragged = ArrayOfRDWaveforms((times, VectorOfVectors([rand(UInt16, 3), rand(UInt16, 5)])))
+                    lhd["wf_ragged"] = ragged
+                    append!(lhd["wf_ragged"], ragged)
+                    @test lhd["wf_ragged"][:] == vcat(ragged, ragged)
+                end
                 @testset "append strings" begin
                     lhd["strs"] = ["a", "bb"]
                     append!(lhd["strs"], ["ccc"])
@@ -567,6 +588,18 @@ using Unitful
                     # the handle does not know column z, appending through it would corrupt the table:
                     @test_throws ArgumentError append!(stale, tbl)
                     @test lhd["tbl_stale"][:] == StructArray((x = [1, 2], y = [3, 4], z = [5, 6]))
+                end
+                @testset "append to itself" begin
+                    vofv = VectorOfVectors([[1, 2], [3]])
+                    lhd["vofv_self"] = vofv
+                    dest = lhd["vofv_self"]
+                    append!(dest, dest)
+                    @test lhd["vofv_self"][:] == vcat(vofv, vofv)
+                    tbl = StructArray((a = [1, 2], w = vofv))
+                    lhd["tbl_self"] = tbl
+                    t = lhd["tbl_self"]
+                    append!(t, t)
+                    @test lhd["tbl_self"][:] == vcat(tbl, tbl)
                 end
             end
         end

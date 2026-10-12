@@ -745,20 +745,26 @@ end
 Base.append!(dest::LH5VoV, src::VectorOfVectors) = _append_impl!(dest, src)
 
 _append_impl!(dest::LH5VoV, src::VectorOfVectors) = begin
-    if !isempty(src)
-        src_flat = src.data[first(src.elem_ptr):(last(src.elem_ptr) - 1)]
-        old_len = last(dest.elem_ptr) - first(dest.elem_ptr)
-        append!(dest.data, src_flat)
-        _append_elemptr!(dest.elem_ptr, src.elem_ptr)
+    isempty(src) && return dest
+    dset = parent(fused(dest).file)["cumulative_length"]
+    try
+        dest_ptr = ArraysOfArrays.internal_element_ptr(dest)
+        old_len = last(dest_ptr) - first(dest_ptr)
+        # The element pointers were read when dest was opened, another handle
+        # may have appended since, and appending from stale pointers corrupts
+        # the array:
+        length(dset) == length(dest) && length(fused(dest)) == old_len || throw(ArgumentError(
+            "The array changed on disk since it was opened, reopen it to append"))
+        src_ptr = ArraysOfArrays.internal_element_ptr(src)
+        src_flat = fused(src)[first(src_ptr):(last(src_ptr) - 1)]
+        # Derived from src before dest changes, since src may be dest itself:
+        new_clen = cumsum(diff(src_ptr)) .+ old_len
+        append!(fused(dest), src_flat)
+        _append_elemptr!(dest_ptr, src_ptr)
         append!(dest.kernel_size, src.kernel_size)
-
-        new_clen = cumsum(diff(src.elem_ptr)) .+ old_len
-        dset = parent(dest.data.file)["cumulative_length"]
-        try
-            append!(LH5Array(dset), new_clen)
-        finally
-            close(dset)
-        end
+        append!(LH5Array(dset), new_clen)
+    finally
+        close(dset)
     end
     dest
 end
@@ -817,14 +823,18 @@ Base.append!(dest::StructArrays.StructVector{T, <:LH5TableColumns},
 Base.append!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) =
     _append_impl!(dest, src)
 
-_append_impl!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
-    # first append values to on-disk array
-    StructArrays.foreachfield(append!, dest, src)
+# The waveform group holds t0, dt and the signal values:
+_waveform_group(wf::LH5VectorOfRDWaveforms) = _waveform_group(wf.signal)
+_waveform_group(signal::LH5AoSA) = parent(fused(signal).file)
+_waveform_group(signal::LH5VoV) = parent(parent(fused(signal).file))
 
-    # and then append time information to on disk array
+_append_impl!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
+    # Taken before anything changes, since src may be dest itself:
     src_t0 = first.(src.time)
     src_dt = step.(src.time)
-    grp = parent(dest.signal.data.file)
+    StructArrays.foreachfield(append!, dest, src)
+
+    grp = _waveform_group(dest)
     dset_t0 = grp["t0"]
     dset_dt = grp["dt"]
     try
