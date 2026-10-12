@@ -203,6 +203,21 @@ using Unitful
                 vv = VectorOfVectors([rand(rand(1:20)) for _ in 1:100])
                 lhd["vv"] = vv
                 @test lhd["vv"][[2, 3, 4, 70]] == vv[[2, 3, 4, 70]]
+
+                # strings need HDF5's own normalization, whichever read path:
+                strs = ["a", "bb", "ccc", "d"]
+                lhd["strs"] = strs
+                S = lhd["strs"]
+                @test eltype(S) == String
+                @test S[[4, 1, 1]] == strs[[4, 1, 1]]
+                try
+                    LegendHDF5IO.scatter_bulk_max_bytes[] = 0
+                    LegendHDF5IO.scatter_bulk_max_waste[] = 0
+                    @test S[[4, 1, 1]] == strs[[4, 1, 1]]
+                finally
+                    LegendHDF5IO.scatter_bulk_max_bytes[] = old_max
+                    LegendHDF5IO.scatter_bulk_max_waste[] = old_waste
+                end
             end
 
             # sparse index patterns on contiguous-layout data trigger
@@ -222,6 +237,13 @@ using Unitful
                 lhd["b"] = b
                 spb = [1, 3, 4, 2^20 + 3]
                 @test lhd["b"][spb] == b[spb]
+
+                # scattered reads of long strings fetch the selected elements only:
+                long = repeat('x', 16384)
+                lhd["ls"] = fill(long, 2048)
+                LS = lhd["ls"]
+                @test LS[[1, 2048]] == [long, long]
+                @test (@allocated LS[[1, 2048]]) < 2^20
 
                 data = rand(UInt16, 700, 2000)
                 lhd["aofa"] = VectorOfSimilarVectors(data)
@@ -257,6 +279,7 @@ using Unitful
                 lhd["x"] = x * u"keV"
                 lhd["wf"] = VectorOfSimilarVectors(data)
                 lhd["flags"] = flags
+                lhd["strs"] = ["x$i" for i in 1:50]
                 lhd["empty"] = Float32[]
                 lhd["empty2d"] = zeros(Int, 3, 0)
             end
@@ -305,6 +328,13 @@ using Unitful
                 @test_throws BoundsError X[mask[1:10]]
                 @test_throws BoundsError X[vcat(mask, false)]
 
+                # string datasets take part in the lazy machinery like any other:
+                S = lhd["strs"]
+                @test eltype(S) == String
+                @test first(S) == "x1"
+                @test collect(view(S, 2:3)) == ["x2", "x3"]
+                @test collect(S .* "!") == ["x$(i)!" for i in 1:50]
+
                 # empty datasets have a valid chunk grid (DiskArrays itself
                 # cannot view, broadcast or reduce empty arrays yet):
                 E = lhd["empty"]
@@ -329,9 +359,13 @@ using Unitful
                 lhd["x"] = rand(Float32, 100) * u"keV"
                 lhd["b"] = rand(Bool, 20)
                 lhd["wf"] = VectorOfSimilarVectors(rand(UInt16, 10, 30))
+                lhd["s"] = ["a", "bb", "ccc"]
             end
             lh5open(path, "r+") do lhd
                 X, B, W = lhd["x"], lhd["b"], lhd["wf"]
+                S = lhd["s"]
+                S[1:2] = ["p", "q"]
+                @test S[:] == ["p", "q", "ccc"]
                 X[1:3] = Float32[1, 2, 3] * u"keV"
                 @test X[1:3] == Float32[1, 2, 3] * u"keV"
                 # values in a compatible unit are converted:
@@ -417,6 +451,7 @@ using Unitful
                     tbl = StructArray((
                         e = rand(Float32, 100),
                         wf = VectorOfSimilarVectors(rand(UInt16, 50, 100)),
+                        s = string.(1:100),
                     ))
                     lhd["t"] = tbl
                     append!(lhd["t"], tbl)
@@ -504,6 +539,11 @@ using Unitful
                     append!(lhd["tbl_vov"], StructArray((v = VectorOfVectors([[4, 5]]),)))
                     append!(orig, StructArray((v = VectorOfVectors([[6, 7]]),)))
                     @test lhd["tbl_vov"][:] == StructArray((v = VectorOfVectors([[1], [2, 3], [4, 5], [6, 7]]),))
+                end
+                @testset "append strings" begin
+                    lhd["strs"] = ["a", "bb"]
+                    append!(lhd["strs"], ["ccc"])
+                    @test lhd["strs"][:] == ["a", "bb", "ccc"]
                 end
                 @testset "append through a stale handle" begin
                     tbl = StructArray((x = [1, 2], y = [3, 4]))

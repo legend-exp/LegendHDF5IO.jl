@@ -76,9 +76,14 @@ LH5Array(ds::HDF5.Dataset, DT::Type{<:AbstractArray}) = begin
     isnothing(N_expected) || N_expected == _ndims(ds) || throw(ArgumentError(
         "Dataset has $(_ndims(ds)) dimensions but expected $N_expected from datatype"))
     u = getunits(ds)
-    ET = (u == NoUnits) ? eltype(ds) : typeof(eltype(ds)(0) * u)
+    ET = (u == NoUnits) ? _julia_eltype(ds) : typeof(eltype(ds)(0) * u)
     LH5Array{ET}(ds)
 end
+
+# HDF5 reports string datasets by their storage type:
+_julia_eltype(ds::HDF5.Dataset) = _julia_eltype(eltype(ds))
+_julia_eltype(::Type{T}) where {T} = T
+_julia_eltype(::Type{<:Union{Cstring, HDF5.FixedString}}) = String
 """
     LH5Array(ds::HDF5.H5DataStore, ::Type{<:Bool}) = begin
 
@@ -323,6 +328,10 @@ _getindex_impl(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
     _read_result(val, Bool, idxs...) .> 0
 end
 
+# HDF5 converts strings itself when asked for String:
+_getindex_impl(lh::LH5Array{String, N}, idxs::Vararg{HDF5.IndexType, N}
+) where {N} = read(lh.file, String, idxs...)
+
 function _append_elemptr!(dest_ptr::AbstractVector{<:Integer}, src_ptr::AbstractVector{<:Integer})
     offset = last(dest_ptr) - first(src_ptr)
     append!(dest_ptr, view(src_ptr, firstindex(src_ptr) + 1:lastindex(src_ptr)) .+ offset)
@@ -386,14 +395,17 @@ function _getindex_scattered_lastdim(
 ) where {T, N, M}
     isempty(ilast) && return lh[front..., 1:0]
     lo, hi = Int.(extrema(ilast))
-    span = hi - lo + 1
-    row_bytes = sizeof(T) * prod(Base.front(size(lh)))
-    span_bytes = span * row_bytes
     # For small or densely covered index spans a single bounding read is
-    # cheaper than any scattered read, and gathers from it in any index order:
-    if span_bytes <= scatter_bulk_max_bytes[] ||
-        span_bytes <= scatter_bulk_max_waste[] * length(ilast) * row_bytes
-        return _select_lastdim(lh[front..., lo:hi], ilast .- (lo - 1))
+    # cheaper than any scattered read, and gathers from it in any index order.
+    # Variable-length elements like strings are always read selectively, since
+    # the size of their payload is unknown up front:
+    if isbitstype(T)
+        row_bytes = sizeof(T) * prod(Base.front(size(lh)))
+        span_bytes = (hi - lo + 1) * row_bytes
+        if span_bytes <= scatter_bulk_max_bytes[] ||
+            span_bytes <= scatter_bulk_max_waste[] * length(ilast) * row_bytes
+            return _select_lastdim(lh[front..., lo:hi], ilast .- (lo - 1))
+        end
     end
     # HDF5 reads selections in index order, so the scattered paths need
     # sorted indices:
@@ -408,8 +420,9 @@ function _getindex_scattered_sparse(
     # Point selections beat per-run reads for vectors of any layout, hyperslab
     # unions only for contiguous-layout datasets (libhdf5 maps large irregular
     # selections onto chunks slowly, while sorted per-run reads make good use
-    # of the chunk cache):
-    if all(i -> i isa Colon, front) && (N == 1 || _is_contiguous(lh.file))
+    # of the chunk cache). Both read raw bytes, so element types that HDF5
+    # has to convert, like strings, always take the per-run path:
+    if isbitstype(T) && all(i -> i isa Colon, front) && (N == 1 || _is_contiguous(lh.file))
         return _getindex_scattered_single_read(lh, ilast)
     end
     _getindex_scattered_runs(lh, front, ilast)
@@ -702,7 +715,7 @@ _materialize(A::VectorOfEncodedArrays{T}) where {T} =
 _materialize(A::VectorOfEncodedSimilarArrays{T}) where {T} =
     VectorOfEncodedSimilarArrays{T}(A.codec, A.innersize, _materialize(A.encoded))
 
-@inline _ustrip(x::AbstractArray{T}) where T<:Real = x
+@inline _ustrip(x::AbstractArray) = x
 @inline _ustrip(x::AbstractArray{T}) where T<:Quantity = 
     reinterpret(Unitful.numtype(T), x) 
 
@@ -993,19 +1006,10 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
-# write AbstractArray{<:String}
-function create_entry(parent::LHDataStore, name::AbstractString, 
-    data::AbstractArray{String, N}; kwargs...) where {N}
-
-    parent.data_store[name] = data
-    setdatatype!(parent.data_store[name], Array{String, N})
-    nothing
-end
-
-# write AbstractArray{<:Real}
+# write AbstractArray{<:Real} and AbstractArray{String}
 function create_entry(parent::LHDataStore, name::AbstractString,
     data::AbstractArray{T}; usechunks::Bool=false, compress::Symbol=:none
-) where {T<:Real}
+) where {T<:Union{Real, String}}
 
     dtype = HDF5.datatype(T)
     ds = if !usechunks && compress === :none
