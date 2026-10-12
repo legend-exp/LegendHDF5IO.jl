@@ -580,13 +580,16 @@ _getindex_impl(lh::LH5Array{T, N},
 ) where {T, N} = begin
     front, ilast = Base.front(idxs), idxs[end]
     if ilast isa AbstractVector{Bool}
+        checkbounds(lh, front..., ilast)
         lh[front..., findall(_materialize(ilast))]
     elseif ilast isa Base.LogicalIndex
         # to_indices turns logical masks into iterate-only LogicalIndex;
         # materialize the mask, iterating it would read lazy masks per element:
+        checkbounds(lh, front..., ilast.mask)
         lh[front..., findall(_materialize(ilast.mask))]
     elseif ilast isa AbstractVector{<:Integer} && !(ilast isa AbstractRange) &&
         all(i -> i isa HDF5.IndexType, front)
+        checkbounds(lh, idxs...)
         _getindex_scattered_lastdim(lh, front, ilast)
     else
         invoke(getindex, Tuple{DiskArrays.AbstractDiskArray{T, N}, Vararg{Any, N}}, lh, idxs...)

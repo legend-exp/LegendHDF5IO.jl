@@ -320,6 +320,10 @@ using Unitful
 
                 @test count(lhd["flags"]) == count(flags)
 
+                # masks must match the axis they index:
+                @test_throws BoundsError X[mask[1:10]]
+                @test_throws BoundsError X[vcat(mask, false)]
+
                 # string datasets take part in the lazy machinery like any other:
                 S = lhd["strs"]
                 @test eltype(S) == String
