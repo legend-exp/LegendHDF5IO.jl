@@ -316,16 +316,18 @@ _getindex_impl(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
     _read_result(val, T, idxs...)
 end
 
-# Bool datasets are stored as UInt8 for h5py compatibility:
+# Bool datasets are stored as UInt8 for h5py compatibility, and other
+# writers may store bytes other than 0 and 1, so the bytes are compared
+# rather than reinterpreted:
 _getindex_impl(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {N} = begin
     dtype = HDF5.datatype(lh.file)
     val = try
-        HDF5.generic_read(lh.file, dtype, Bool, idxs...)
+        HDF5.generic_read(lh.file, dtype, UInt8, idxs...)
     finally
         close(dtype)
     end
-    _read_result(val, Bool, idxs...) .> 0
+    _read_result(val, UInt8, idxs...) .> 0
 end
 
 # HDF5 converts strings itself when asked for String:
@@ -572,6 +574,10 @@ function _read_selection(ds::HDF5.Dataset, ::Type{T}, fspace::HDF5.Dataspace,
         close(filetype)
     end
 end
+
+# Bool datasets are stored as UInt8:
+_read_selection(ds::HDF5.Dataset, ::Type{Bool}, fspace::HDF5.Dataspace, dims::Dims) =
+    _read_selection(ds, UInt8, fspace, dims) .> 0
 
 _getindex_impl(lh::LH5Array{T, N},
     idxs::Vararg{Union{HDF5.IndexType, AbstractVector{<:Integer}}, N}
