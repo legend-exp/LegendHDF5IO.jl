@@ -700,8 +700,15 @@ Base.size(lh::LH5Array{T, N}) where {T, N} = begin
     end
 end
 
-Base.copyto!(dest::Array, src::LH5Array{T, N}) where {T, N} =
+# Reading straight into dest saves a copy, but HDF5 reinterprets the bytes
+# instead of converting values, so only identical native number types
+# qualify. Bool datasets hold bytes to compare and strings need conversion:
+const _NativeNumber = Union{AbstractFloat, Signed, Unsigned}
+
+Base.copyto!(dest::Array{T, N}, src::LH5Array{T, N}) where {T<:_NativeNumber, N} =
     copyto!(dest, src.file, ntuple(_ -> Colon(), Val(N))...)
+Base.copyto!(dest::Array, src::LH5Array{T, N}) where {T, N} =
+    copyto!(dest, src[ntuple(_ -> Colon(), Val(N))...])
 
 # Deep conversion of lazily read data into in-memory objects:
 
