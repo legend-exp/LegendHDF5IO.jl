@@ -180,52 +180,53 @@ function _inner_datatype_to_string(::Type{T}) where T
     isempty(s) ? "" : "{$s}"
 end
 
-
-datatype_to_string(::Type{<:RealQuantity}) = "real"
-
-datatype_to_string(::Type{Bool}) = "bool"
-
-# A name registered for the enum type takes precedence over its canonical string:
-function datatype_to_string(T::Type{<:Enum{U}}) where {U}
-    i = findfirst(p -> p.first === T, _datatype_names)
-    isnothing(i) || return _datatype_names[i].second
-    "enum{" * join(broadcast(x -> "$(string(x))=$(U(x))", instances(T)), ",") * "}"
+# A name registered for exactly this type takes precedence over built-in naming:
+function datatype_to_string(::Type{T}) where {T}
+    i = findfirst(p -> p.first == T, _datatype_names)
+    isnothing(i) ? _datatype_to_string_impl(T) : _datatype_names[i].second
 end
 
-datatype_to_string(::Type{<:AbstractString}) = "string"
+_datatype_to_string_impl(::Type{<:RealQuantity}) = "real"
 
-datatype_to_string(::Type{<:Symbol}) = "symbol"
+_datatype_to_string_impl(::Type{Bool}) = "bool"
 
-datatype_to_string(T::Type{<:NTuple{N,Any}}) where {N} = "ntuple$(_inner_datatype_to_string(eltype(T)))"
+_datatype_to_string_impl(T::Type{<:Enum{U}}) where {U} =
+    "enum{" * join(broadcast(x -> "$(string(x))=$(U(x))", instances(T)), ",") * "}"
 
-datatype_to_string(::Type{<:AbstractArray{T,N}}) where {T,N} =
+_datatype_to_string_impl(::Type{<:AbstractString}) = "string"
+
+_datatype_to_string_impl(::Type{<:Symbol}) = "symbol"
+
+_datatype_to_string_impl(T::Type{<:NTuple{N,Any}}) where {N} = "ntuple$(_inner_datatype_to_string(eltype(T)))"
+
+_datatype_to_string_impl(::Type{<:AbstractArray{T,N}}) where {T,N} =
     "array<$N>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:EncodedArray{T,N}}) where {T,N} =
+_datatype_to_string_impl(::Type{<:EncodedArray{T,N}}) where {T,N} =
     "encoded_array<$N>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:StaticArray{TPL,T,N}}) where {TPL,T<:RealQuantity,N} =
+_datatype_to_string_impl(::Type{<:StaticArray{TPL,T,N}}) where {TPL,T<:RealQuantity,N} =
     "fixedsize_array<$N>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:ArrayOfSimilarArrays{T,M,N}}) where {T,M,N} =
+_datatype_to_string_impl(::Type{<:ArrayOfSimilarArrays{T,M,N}}) where {T,M,N} =
     "array_of_equalsized_arrays<$N,$M>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:VectorOfEncodedArrays{T,N}}) where {T,N} =
+_datatype_to_string_impl(::Type{<:VectorOfEncodedArrays{T,N}}) where {T,N} =
     "array_of_encoded_arrays<1,$N>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:VectorOfEncodedSimilarArrays{T,M}}) where {T,M} =
+_datatype_to_string_impl(::Type{<:VectorOfEncodedSimilarArrays{T,M}}) where {T,M} =
     "array_of_encoded_equalsized_arrays<1,$M>$(_inner_datatype_to_string(T))"
 
-datatype_to_string(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
+_datatype_to_string_impl(::Type{<:NamedTuple{K}}) where K = "struct{$(join(K,","))}"
 
 # ToDo: Make this more generic:
-datatype_to_string(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
+_datatype_to_string_impl(::Type{<:StructArrays.StructArray{<:NamedTuple{K}}}) where K = "table{$(join(K,","))}"
 
-datatype_to_string(::Type{<:Histogram{T, N}}) where {T, N} =
+_datatype_to_string_impl(::Type{<:Histogram{T, N}}) where {T, N} =
     "histogram<$N>$(_inner_datatype_to_string(T))"
 
-# Fallback for types registered via register_datatype!:
-function datatype_to_string(::Type{T}) where {T}
+# Subtypes of types registered via register_datatype!:
+function _datatype_to_string_impl(::Type{T}) where {T}
     matches = filter(p -> T <: p.first, _datatype_names)
     isempty(matches) && throw(ArgumentError("No LH5 datatype registered for type $T"))
     reduce((a, b) -> b.first <: a.first ? b : a, matches).second

@@ -45,6 +45,20 @@ function LegendHDF5IO.create_entry(parent::LegendHDF5IO.LHDataStore,
     nothing
 end
 
+struct TestChannelId <: Integer
+    no::Int
+end
+
+LegendHDF5IO.register_datatype!("testchannelid", TestChannelId)
+LegendHDF5IO.LH5Array(ds::HDF5.Dataset, ::Type{<:TestChannelId}) = TestChannelId(read(ds))
+
+function LegendHDF5IO.create_entry(parent::LegendHDF5IO.LHDataStore,
+    name::AbstractString, x::TestChannelId; kwargs...)
+    parent.data_store[name] = x.no
+    LegendHDF5IO.setdatatype!(parent.data_store[name], TestChannelId)
+    nothing
+end
+
 @testset verbose=true "test generic IO" begin
     @testset verbose=true "data types" begin
         @test LegendHDF5IO._sort_datatype_fields("table{values,dt,t0}") == "table{dt,t0,values}"
@@ -64,6 +78,7 @@ end
     end
     @testset "register_datatype!" begin
         LegendHDF5IO.register_datatype!(TestEnum)
+        @test LegendHDF5IO.datatype_to_string(TestEnum) == "enum{te_a=1,te_b=2}"
         # an enum registered under a name is written under that name:
         LegendHDF5IO.register_datatype!("testenumnamed", TestEnumNamed)
         @test LegendHDF5IO.datatype_to_string(TestEnumNamed) == "testenumnamed"
@@ -86,6 +101,18 @@ end
                 writedata(f, "id2", TestId(7))
                 @test readdata(f, "id2") == TestId(7)
                 @test readdata(f, "te") == [te_a, te_b, te_a]
+            end
+        end
+    end
+    @testset "registered names take precedence over built-in ones" begin
+        @test LegendHDF5IO.datatype_to_string(TestChannelId) == "testchannelid"
+        @test LegendHDF5IO.datatype_to_string(Vector{TestChannelId}) == "array<1>{testchannelid}"
+        mktempdir(pwd()) do tmp
+            path = joinpath(tmp, "tmp.lh5")
+            lh5open(path, "cw") do lhd
+                lhd["ch"] = TestChannelId(3)
+                @test LegendHDF5IO.getattribute(lhd.data_store["ch"], :datatype, "") == "testchannelid"
+                @test lhd["ch"] === TestChannelId(3)
             end
         end
     end
