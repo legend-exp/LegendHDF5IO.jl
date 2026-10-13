@@ -634,6 +634,13 @@ using Unitful
                         @test add_entries!(lhd, "tbl", StructArray((y = y,))) |> isnothing
                         @test lhd["tbl"][:] == tbl
                     end
+                    @testset "adding entries with a reused destination" begin
+                        lhd["tbl_dest"] = StructArray((a = [1, 2], b = [3, 4]))
+                        dest = StructArray(lhd["tbl_dest"])
+                        add_entries!(lhd, "tbl_dest", StructArray((c = [5, 6],)), dest)
+                        add_entries!(lhd, "tbl_dest", StructArray((d = [7, 8],)), dest)
+                        @test propertynames(lhd["tbl_dest"]) == (:a, :b, :c, :d)
+                    end
                 end
                 @testset verbose=true "NamedTuples" begin
                     x, y = 1.0, 1.0
