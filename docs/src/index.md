@@ -98,6 +98,9 @@ The chunk size is taken from the first array written to each dataset. With
 `compress = :zstd` (or `true`) datasets are Zstandard-compressed;
 `compress = :deflate` uses shuffle plus deflate for maximum portability.
 Compressed datasets are always chunked, so they compose with `append!`.
+Appends are not transactional: one that fails midway, for example because a
+value cannot be converted to the element type of a column, leaves the columns
+it has already extended longer than the others.
 
 ### Modifying structure
 
