@@ -55,15 +55,13 @@ end
     _register_builtin_datatypes!()
     tbl = StructArrays.StructArray((
         evtno = collect(Int32(1):Int32(4)),
-        energy = rand(4),
+        energy = rand(4) .* u"keV",
         flag = rand(Bool, 4),
         wf = VectorOfSimilarVectors(rand(UInt16, 8, 4)),
         vov = VectorOfVectors([rand(Float32, 3) for _ in 1:4]),
     ))
-    # Reading values with units evaluates the unit expression, which
-    # precompilation does not allow, so the workload stays unitless:
     wfs = ArrayOfRDWaveforms((
-        fill(range(0.0, 1.0, length = 8), 4),
+        fill(range(0.0u"μs", 1.0u"μs", length = 8), 4),
         VectorOfSimilarVectors(rand(UInt16, 8, 4)),
     ))
     @compile_workload begin

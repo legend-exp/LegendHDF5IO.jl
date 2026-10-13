@@ -466,27 +466,6 @@ end
 _is_contiguous(ds::HDF5.Dataset) = _with_create_properties(p -> p.layout == :contiguous, ds)
 _chunk_dims(ds::HDF5.Dataset) = _with_create_properties(p -> p.layout == :chunked ? p.chunk : nothing, ds)
 
-# HDF5.jl gained bindings for these libhdf5 functions in v0.17:
-@static if isdefined(HDF5.API, :h5s_select_elements)
-    const _h5s_select_elements = HDF5.API.h5s_select_elements
-    const _h5s_modify_select = HDF5.API.h5s_modify_select
-else
-    function _h5s_select_elements(space_id, op, num_elem, coord)
-        ret = ccall((:H5Sselect_elements, HDF5.API.libhdf5), HDF5.API.herr_t,
-            (HDF5.API.hid_t, HDF5.API.H5S_seloper_t, Csize_t, Ptr{HDF5.API.hsize_t}),
-            space_id, op, num_elem, coord)
-        ret < 0 && error("Error selecting dataspace elements")
-        nothing
-    end
-    function _h5s_modify_select(space1_id, op, space2_id)
-        ret = ccall((:H5Smodify_select, HDF5.API.libhdf5), HDF5.API.herr_t,
-            (HDF5.API.hid_t, HDF5.API.H5S_seloper_t, HDF5.API.hid_t),
-            space1_id, op, space2_id)
-        ret < 0 && error("Error modifying dataspace selection")
-        nothing
-    end
-end
-
 # A single H5Dread with a scattered dataspace selection, for sorted indices:
 function _getindex_scattered_single_read(
     lh::LH5Array{T, N}, ilast::AbstractVector{<:Integer}
@@ -517,7 +496,7 @@ end
 
 function _select_scattered!(fspace::HDF5.Dataspace, dims::Dims{1}, idxs::Vector{Int})
     coords = HDF5.API.hsize_t[i - 1 for i in idxs]
-    _h5s_select_elements(fspace, HDF5.API.H5S_SELECT_SET, length(coords), coords)
+    HDF5.API.h5s_select_elements(fspace, HDF5.API.H5S_SELECT_SET, length(coords), coords)
     nothing
 end
 
@@ -550,7 +529,7 @@ function _select_runs!(fspace::HDF5.Dataspace, dims::Dims,
         fs2 = HDF5.dataspace(dims)
         try
             _select_runs!(fs2, dims, start, count, runs, mid + 1, hi, true)
-            _h5s_modify_select(fspace, HDF5.API.H5S_SELECT_OR, fs2)
+            HDF5.API.h5s_modify_select(fspace, HDF5.API.H5S_SELECT_OR, fs2)
         finally
             close(fs2)
         end
