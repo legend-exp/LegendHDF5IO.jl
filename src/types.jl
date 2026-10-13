@@ -955,19 +955,10 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
-# write AbstractArray{<:String}
-function create_entry(parent::LHDataStore, name::AbstractString, 
-    data::AbstractArray{String, N}; kwargs...) where {N}
-
-    parent.data_store[name] = data
-    setdatatype!(parent.data_store[name], Array{String, N})
-    nothing
-end
-
-# write AbstractArray{<:Real}
+# write AbstractArray{<:Real} and AbstractArray{String}
 function create_entry(parent::LHDataStore, name::AbstractString,
     data::AbstractArray{T}; usechunks::Bool=false, compress::Symbol=:none
-) where {T<:Real}
+) where {T<:Union{Real, String}}
 
     dtype = HDF5.datatype(T)
     ds = if !usechunks && compress === :none

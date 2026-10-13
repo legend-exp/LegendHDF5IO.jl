@@ -405,6 +405,7 @@ using Unitful
                     tbl = StructArray((
                         e = rand(Float32, 100),
                         wf = VectorOfSimilarVectors(rand(UInt16, 50, 100)),
+                        s = string.(1:100),
                     ))
                     lhd["t"] = tbl
                     append!(lhd["t"], tbl)
@@ -476,6 +477,11 @@ using Unitful
                     append!(lhd["tbl_vov"], StructArray((v = VectorOfVectors([[4, 5]]),)))
                     append!(orig, StructArray((v = VectorOfVectors([[6, 7]]),)))
                     @test lhd["tbl_vov"][:] == StructArray((v = VectorOfVectors([[1], [2, 3], [4, 5], [6, 7]]),))
+                end
+                @testset "append strings" begin
+                    lhd["strs"] = ["a", "bb"]
+                    append!(lhd["strs"], ["ccc"])
+                    @test lhd["strs"][:] == ["a", "bb", "ccc"]
                 end
                 @testset "append through a stale handle" begin
                     tbl = StructArray((x = [1, 2], y = [3, 4]))
