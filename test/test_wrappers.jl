@@ -476,6 +476,14 @@ using Unitful
                     @test_throws Unitful.DimensionError append!(lhd["e"], lhd["t"])
                     @test lhd["e"][:] == [1.0, 2.0, 3.0]u"keV"
                 end
+                @testset "append through a stale ragged-array handle" begin
+                    lhd["vofv_stale"] = VectorOfVectors([[1, 2], [3]])
+                    h1, h2 = lhd["vofv_stale"], lhd["vofv_stale"]
+                    append!(h1, VectorOfVectors([[4, 5]]))
+                    # h2 still holds the element pointers from before that append:
+                    @test_throws ArgumentError append!(h2, VectorOfVectors([[6]]))
+                    @test lhd["vofv_stale"][:] == [[1, 2], [3], [4, 5]]
+                end
                 @testset "append through a lazy table after column changes" begin
                     lhd["tbl_cols"] = StructArray((a = [1, 2], b = [3, 4]))
                     t = lhd["tbl_cols"]
