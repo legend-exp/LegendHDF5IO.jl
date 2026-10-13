@@ -462,6 +462,20 @@ using Unitful
                     lhd["waveform"] = waveform
                     @test append!(lhd["waveform"], waveform)[:] == new_waveform
                 end
+                @testset "append converts values" begin
+                    lhd["f"] = [1.0, 2.0]
+                    lhd["i"] = [3, 4]
+                    @test convert(Array{Float64, 1}, lhd["i"]) == [3.0, 4.0]
+                    append!(lhd["f"], lhd["i"])
+                    @test lhd["f"][:] == [1.0, 2.0, 3.0, 4.0]
+                    lhd["e"] = [1.0, 2.0]u"keV"
+                    lhd["e_ev"] = [3000.0]u"eV"
+                    lhd["t"] = [1.0]u"s"
+                    append!(lhd["e"], lhd["e_ev"])
+                    @test lhd["e"][:] == [1.0, 2.0, 3.0]u"keV"
+                    @test_throws Unitful.DimensionError append!(lhd["e"], lhd["t"])
+                    @test lhd["e"][:] == [1.0, 2.0, 3.0]u"keV"
+                end
                 @testset "append through a lazy table after column changes" begin
                     lhd["tbl_cols"] = StructArray((a = [1, 2], b = [3, 4]))
                     t = lhd["tbl_cols"]
