@@ -18,6 +18,18 @@ using RadiationDetectorSignals: RealQuantity
 
 @enum TestEnum te_a=1 te_b=2
 @enum TestEnumNamed ten_a=1 ten_b=2
+@enum TestStatusA ok_a=0 failed_a=1
+@enum TestStatusB ok_b=0 failed_b=1
+
+module EnumModA
+    @enum Status st_ok=0 st_failed=1
+end
+
+module EnumModB
+    @enum Status st_ok=0 st_failed=1
+end
+
+struct TestUnregistered end
 
 struct TestId
     no::Int
@@ -76,6 +88,36 @@ end
                 @test readdata(f, "te") == [te_a, te_b, te_a]
             end
         end
+    end
+    @testset "conflicting registrations" begin
+        register_datatype! = LegendHDF5IO.register_datatype!
+        datatype_to_string = LegendHDF5IO.datatype_to_string
+        datatype_from_string = LegendHDF5IO.datatype_from_string
+
+        register_datatype!("teststatus", TestStatusA)
+        @test_throws ArgumentError register_datatype!("teststatus", TestStatusB)
+        @test datatype_from_string("teststatus") == TestStatusA
+        @test datatype_to_string(TestStatusB) == "enum{ok_b=0,failed_b=1}"
+        @test register_datatype!("teststatus", TestStatusA) === nothing
+        @test_throws ArgumentError register_datatype!("teststatus_alias", TestStatusA)
+        @test datatype_to_string(TestStatusA) == "teststatus"
+
+        register_datatype!(EnumModB.Status)
+        @test_throws ArgumentError register_datatype!(EnumModA.Status)
+        @test datatype_from_string(datatype_to_string(EnumModB.Status)) == EnumModB.Status
+        @test register_datatype!(EnumModB.Status) === nothing
+
+        for name in ("real", "bool", "string", "symbol", "struct{a,b}", "table{a,b}",
+            "ntuple{real}", "array<1>{real}", "encoded_array<1>{real}",
+            "fixedsize_array<1>{real}", "array_of_equalsized_arrays<1,1>{real}",
+            "array_of_encoded_arrays<1,1>{real}",
+            "array_of_encoded_equalsized_arrays<1,1>{real}", "histogram<1>{real}")
+            @test_throws ArgumentError register_datatype!(name, TestUnregistered)
+        end
+        # names the datatype parser cannot read are rejected as well:
+        @test_throws ArgumentError register_datatype!("status2", TestUnregistered)
+        @test_throws ArgumentError register_datatype!("my type", TestUnregistered)
+        @test_throws ArgumentError datatype_to_string(TestUnregistered)
     end
     @testset "Bool datasets with units are rejected" begin
         mktempdir(pwd()) do tmp

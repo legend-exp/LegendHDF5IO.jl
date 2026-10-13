@@ -7,6 +7,15 @@
 
 const datatype_regexp = r"""^(([A-Za-z_]*)(<([0-9,]*)>)?)(\{(.*)\})?$"""
 
+# Enum datatypes are not built in, they are resolved via the registry:
+const _builtin_datatype_kinds = (
+    "real", "bool", "string", "symbol", "struct", "table", "ntuple", "array",
+    "encoded_array", "fixedsize_array", "array_of_equalsized_arrays",
+    "array_of_encoded_arrays", "array_of_encoded_equalsized_arrays", "histogram",
+)
+
+_is_builtin_datatype(s::AbstractString) = match(datatype_regexp, s)[2] in _builtin_datatype_kinds
+
 function _eldatatype_from_string(s::Union{Nothing,AbstractString})
     if isnothing(s) || isempty(s)
         RealQuantity
@@ -133,6 +142,11 @@ Register the LH5 datatype string `name` for type `T`, for reading and
 writing. Without `name`, the canonical datatype string of `T` is used
 (e.g. for `Enum` types).
 
+Each name can only be registered for one type, and each type only under one
+name. Built-in datatype names like `"real"` or `"array<1>{real}"` are
+reserved. Conflicting registrations throw an `ArgumentError`, while repeating
+a registration has no effect.
+
 To support reading and writing values of type `T`, also define
 
 ```julia
@@ -141,9 +155,21 @@ LegendHDF5IO.create_entry(parent::LHDataStore, name::AbstractString, x::T; kwarg
 ```
 """
 function register_datatype!(name::AbstractString, ::Type{T}) where {T}
-    _datatype_dict[_sort_datatype_fields(name)] = T
-    filter!(p -> p.first !== T, _datatype_names)
-    push!(_datatype_names, T => name)
+    key = _sort_datatype_fields(name)
+    _is_builtin_datatype(key) &&
+        throw(ArgumentError("LH5 datatype \"$name\" is built in and cannot be registered"))
+    registered_type = get(_datatype_dict, key, T)
+    registered_type == T ||
+        throw(ArgumentError("LH5 datatype \"$name\" is already registered for type $registered_type"))
+    i = findfirst(p -> p.first == T, _datatype_names)
+    if isnothing(i)
+        _datatype_dict[key] = T
+        push!(_datatype_names, T => name)
+    else
+        registered_name = _datatype_names[i].second
+        _sort_datatype_fields(registered_name) == key ||
+            throw(ArgumentError("Type $T is already registered as LH5 datatype \"$registered_name\""))
+    end
     nothing
 end
 

@@ -149,6 +149,10 @@ end
 `Enum` types only need registration:
 `LegendHDF5IO.register_datatype!(MyEnum)`.
 
+Each datatype name can only be registered for a single type, and each type
+under a single name. Conflicting registrations, and registrations of built-in
+names like `"real"`, throw an `ArgumentError`.
+
 ## The `readdata`/`writedata` API
 
 The functions `LegendDataTypes.readdata` and `LegendDataTypes.writedata`
