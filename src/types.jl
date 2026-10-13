@@ -1228,9 +1228,10 @@ function add_entries!(lhd::LHDataStore, i::AbstractString,
 
     length(dest) == length(src) || throw(DimensionMismatch(
         "Cannot add columns of length $(length(src)) to table of length $(length(dest))"))
-    new_cols = (; StructArrays.components(dest)..., StructArrays.components(src)...)
+    # dest may predate earlier additions, the stored column list is current:
+    stored = propertynames(LH5Array(lhd.data_store[i]))
     add_entries!(lhd, i, StructArrays.components(src), StructArrays.components(dest))
-    setdatatype!(lhd.data_store[i], StructArray{NamedTuple{keys(new_cols)}})
+    setdatatype!(lhd.data_store[i], StructArray{NamedTuple{(stored..., keys(StructArrays.components(src))...)}})
     nothing
 end
 
