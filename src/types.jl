@@ -392,22 +392,22 @@ const scatter_bulk_max_waste = Ref(4)
 _select_lastdim(A::AbstractArray{<:Any, K}, i) where {K} =
     A[ntuple(_ -> Colon(), Val(K - 1))..., i]
 
-# Variable-length data, like strings, is stored by reference:
-_storage_bytes(::Type{T}) where {T} = isbitstype(T) ? sizeof(T) : sizeof(Ptr{Cvoid})
-
 function _getindex_scattered_lastdim(
     lh::LH5Array{T, N}, front::NTuple{M, Any}, ilast::AbstractVector{<:Integer}
 ) where {T, N, M}
     isempty(ilast) && return lh[front..., 1:0]
     lo, hi = Int.(extrema(ilast))
-    span = hi - lo + 1
-    row_bytes = _storage_bytes(T) * prod(Base.front(size(lh)))
-    span_bytes = span * row_bytes
     # For small or densely covered index spans a single bounding read is
-    # cheaper than any scattered read, and gathers from it in any index order:
-    if span_bytes <= scatter_bulk_max_bytes[] ||
-        span_bytes <= scatter_bulk_max_waste[] * length(ilast) * row_bytes
-        return _select_lastdim(lh[front..., lo:hi], ilast .- (lo - 1))
+    # cheaper than any scattered read, and gathers from it in any index order.
+    # Variable-length elements like strings are always read selectively, since
+    # the size of their payload is unknown up front:
+    if isbitstype(T)
+        row_bytes = sizeof(T) * prod(Base.front(size(lh)))
+        span_bytes = (hi - lo + 1) * row_bytes
+        if span_bytes <= scatter_bulk_max_bytes[] ||
+            span_bytes <= scatter_bulk_max_waste[] * length(ilast) * row_bytes
+            return _select_lastdim(lh[front..., lo:hi], ilast .- (lo - 1))
+        end
     end
     # HDF5 reads selections in index order, so the scattered paths need
     # sorted indices:

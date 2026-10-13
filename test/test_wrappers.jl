@@ -249,6 +249,13 @@ using Unitful
                 @test lhd["b"][spb] == b[spb]
                 @test lhd["b"][spb] isa BitVector
 
+                # scattered reads of long strings fetch the selected elements only:
+                long = repeat('x', 16384)
+                lhd["ls"] = fill(long, 2048)
+                LS = lhd["ls"]
+                @test LS[[1, 2048]] == [long, long]
+                @test (@allocated LS[[1, 2048]]) < 2^20
+
                 data = rand(UInt16, 700, 2000)
                 lhd["aofa"] = VectorOfSimilarVectors(data)
                 W = lhd["aofa"]
