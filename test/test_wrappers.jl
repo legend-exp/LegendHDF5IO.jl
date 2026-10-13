@@ -151,7 +151,11 @@ using Unitful
                     waveform = ArrayOfRDWaveforms((fill(trng, 50), data))
                     @test setindex!(lhd, waveform, "waveform") |> isnothing
                     @test lhd["waveform"][:] == waveform
-                    @test !isdefined(LegendHDF5IO, :g_state)
+                    # slices and scattered reads take the element type of what they read:
+                    w = lhd["waveform"]
+                    @test collect(w[1:2]) == waveform[1:2]
+                    @test identity.(w[1:2]) == waveform[1:2]
+                    @test collect(w[[1, 3]]) == waveform[[1, 3]]
                 end
                 @testset "failed group writes leave nothing behind" begin
                     @test_throws ArgumentError lhd["bad"] = (a = [1, 2], b = Dict(1 => 2))
