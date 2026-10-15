@@ -7,7 +7,7 @@
 
 const datatype_regexp = r"""^(([A-Za-z_]*)(<([0-9,]*)>)?)(\{(.*)\})?$"""
 
-# Enum datatypes are not built in, they are resolved via the registry:
+# Enum datatypes are not built in but resolved via the registry:
 const _builtin_datatype_kinds = (
     "real", "bool", "string", "symbol", "struct", "table", "ntuple", "array",
     "encoded_array", "fixedsize_array", "array_of_equalsized_arrays",
@@ -147,7 +147,7 @@ name. Built-in datatype names like `"real"` or `"array<1>{real}"` are
 reserved. Conflicting registrations throw an `ArgumentError`, while repeating
 a registration has no effect.
 
-To support reading and writing values of type `T`, also define
+For a type `T` without built-in support, also define
 
 ```julia
 LegendHDF5IO.LH5Array(ds::HDF5.Dataset, ::Type{<:T})

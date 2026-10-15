@@ -193,7 +193,7 @@ using Unitful
                 @test W[dense_idxs] == VectorOfSimilarVectors(data)[dense_idxs]
 
                 # the bulk/scattered decision is tunable and must not
-                # change what is read:
+                # change the returned values:
                 tune = [5, 5, 900, 17, 3]
                 old_max, old_waste = LegendHDF5IO.scatter_bulk_max_bytes[],
                     LegendHDF5IO.scatter_bulk_max_waste[]
