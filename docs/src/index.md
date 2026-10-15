@@ -1,7 +1,7 @@
 # LegendHDF5IO.jl
 
-LegendHDF5IO provides read and write functionality for HDF5 files that
-follow the [LEGEND LH5 data format](https://legend-exp.github.io/legend-data-format-specs/dev/hdf5/).
+LegendHDF5IO reads and writes HDF5 files that follow the
+[LEGEND LH5 data format](https://legend-exp.github.io/legend-data-format-specs/dev/hdf5/).
 Such files store arrays, tables, waveforms, histograms and nested structures
 together with `datatype` and `units` attributes, and are interoperable with
 the Python package [legend-pydataobj](https://github.com/legend-exp/legend-pydataobj).
@@ -9,7 +9,7 @@ the Python package [legend-pydataobj](https://github.com/legend-exp/legend-pydat
 ## Getting started
 
 Open a file with [`lh5open`](@ref), which returns an [`LHDataStore`](@ref).
-Writing is done via `setindex!`, reading via `getindex`:
+Write with `setindex!`, read with `getindex`:
 
 ```julia
 using LegendHDF5IO, Unitful
@@ -29,26 +29,27 @@ end
 ```
 
 Datasets are wrapped as lazy [`LH5Array`](@ref)s, so slicing reads only the
-requested part of the data from disk. `LH5Array` implements the
+requested part of the data from disk. Arrays of `Enum`s, `StaticVector`s and
+`NTuple`s are the exception and are read eagerly. `LH5Array` implements the
 [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl) interface: views,
 iteration and reductions like `sum` read the data block by block, and
-broadcasts over `LH5Array`s are lazy, evaluated chunk-wise when collected or
-written, so selecting columns with
-[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) does not
-read any data. `map` is eager, as in Base. Datasets opened for writing can be modified in place within their
-current size (`E[1:10] = ...`); `append!` grows them. Nested structures (`NamedTuple`s, tables, waveforms) are represented
-as HDF5 groups.
+broadcasts over `LH5Array`s are lazy, evaluated chunk by chunk when collected
+or written, so selecting columns with
+[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) opens
+the columns without reading their values. `map` is eager, as in Base. Datasets
+opened for writing can be modified in place within their current size
+(`E[1:10] = ...`); `append!` grows them. Nested structures (`NamedTuple`s,
+tables, waveforms) are represented as HDF5 groups.
 
 ### Tables and waveforms
 
 Tables and vectors of `RDWaveform`s round-trip through their LH5
 representation. Tables are read as [`LH5LazyTable`](@ref)s, which open a
-column when it is accessed and not before, so reading a few columns of a
-wide table costs a few reads instead of one per column. They satisfy the
-Tables.jl column interface, and treating one as an array (broadcasting,
-indexing, iteration) converts it to a `StructArray` of `NamedTuple` rows
-over all columns. Anything satisfying the Tables.jl column interface can
-be written:
+column when it is accessed and not before, so reading a few columns of a wide
+table costs a few reads instead of one per column. They satisfy the Tables.jl
+column interface, and treating one as an array (broadcasting, indexing,
+iteration) converts it to a `StructArray` of `NamedTuple` rows over all
+columns. Anything that satisfies the Tables.jl column interface can be written:
 
 ```julia
 using StructArrays, ArraysOfArrays, RadiationDetectorSignals
@@ -72,20 +73,21 @@ end
 
 Reading `lhd["evt"]` returns an `LH5LazyTable`; `lhd["evt"][:]`, or indexing
 with a range, reads the rows into a `StructArray`. A table handle keeps the
-column list it was opened with: columns added or removed through other handles
-are not seen by its reads, and `append!` through it refuses with an error.
-Lazy tables cannot be concatenated with `vcat`; read them first.
+column names it was opened with: columns added through other handles are not
+visible to it, reading a column deleted elsewhere fails, and `append!` refuses
+when the set of column names has changed. Lazy tables cannot be concatenated
+with `vcat`; read them first.
 
 Scattered reads either read the whole index span the events cover, or the
 events themselves. The thresholds for that choice,
 [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) and
-[`LegendHDF5IO.scatter_bulk_max_waste`](@ref), default to local storage;
-raise them on filesystems with a high per-operation latency, such as
+[`LegendHDF5IO.scatter_bulk_max_waste`](@ref), are tuned for local storage by
+default; raise them on filesystems with a high per-operation latency, such as
 cluster filesystems.
 
 ### Appending and compression
 
-Open the file with `usechunks = true` to create extensible datasets, then
+Open the file with `usechunks = true` to create extensible array datasets, then
 grow them with `append!` (always along the last dimension):
 
 ```julia
@@ -95,11 +97,15 @@ lh5open("events.lh5", "cw", usechunks = true) do lhd
 end
 ```
 
-The chunk size is taken from the first array written to each dataset. With
-`compress = :zstd` (or `true`) datasets are Zstandard-compressed;
-`compress = :deflate` uses shuffle plus deflate for maximum portability.
-Compressed datasets are always chunked, so they compose with `append!`, and
-their chunks are capped at 1 MiB, since a partial read decompresses whole
+The first array written to a dataset sets its chunk size. Appends are not
+transactional: one that fails midway, for example because a value cannot be
+converted to the element type of a column, leaves the columns it has already
+extended longer than the others.
+
+With `compress = :zstd` (or `true`), array datasets are Zstandard-compressed,
+and `compress = :deflate` uses shuffle plus deflate for maximum portability.
+Compressed datasets are always chunked, so `append!` works on them as well,
+and their chunks are capped at 1 MiB, since a partial read decompresses whole
 chunks.
 
 ### Modifying structure
@@ -149,15 +155,15 @@ end
 `Enum` types only need registration:
 `LegendHDF5IO.register_datatype!(MyEnum)`.
 
-Each datatype name can only be registered for a single type, and each type
-under a single name. Conflicting registrations, and registrations of built-in
-names like `"real"`, throw an `ArgumentError`.
+A name can be registered for one type only, and a type under one name only.
+Conflicting registrations, and built-in names like `"real"`, are rejected with
+an `ArgumentError`.
 
 ## The `readdata`/`writedata` API
 
 The functions `LegendDataTypes.readdata` and `LegendDataTypes.writedata`
-provide an alternative, eager interface operating directly on `HDF5.File`
-or `HDF5.Group` objects:
+provide an eager alternative that operates directly on `HDF5.File` or
+`HDF5.Group` objects:
 
 ```julia
 using HDF5

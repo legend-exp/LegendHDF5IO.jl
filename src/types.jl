@@ -8,15 +8,14 @@ export LHDataStore, LH5Array, LH5LazyTable
 Array wrapper for an `HDF5.Dataset` following the LEGEND data format, as in
 ".lh5" files.
 
-`getindex` reads the requested part of the on-disk array, so data can be
-read partially without loading the whole array first. `append!` extends the
-on-disk array (which requires it to be chunked); data is always appended
-along the last dimension.
+`getindex` reads only the requested part of the on-disk array. `append!`
+extends the on-disk array along its last dimension, which requires a chunked
+dataset.
 
 `LH5Array` implements the [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl)
-interface: views, iteration and reductions read the data block-wise,
-broadcasts are lazy, and `setindex!` writes back into the dataset within its
-current size.
+interface: views, iteration and reductions read the data chunk by chunk,
+broadcasts are lazy, and `setindex!` writes back into the dataset within
+its current size.
 
 # Default constructors
 
@@ -364,13 +363,15 @@ end
     LegendHDF5IO.scatter_bulk_max_bytes[]
 
 Size up to which a scattered read reads the whole index span its events
-cover, instead of reading the events themselves (1 MB by default).
+cover, instead of reading the events themselves (1 MiB by default).
 
-Reading the span costs one read operation, reading the events costs one
-per group of adjacent events. The default suits local storage; on
-filesystems with a high per-operation latency, such as cluster
-filesystems, fewer and larger reads pay off, so raise it there. Can also
-be set per environment as the preference "scatter_bulk_max_bytes".
+Reading the span costs one read operation. Reading the events costs one
+scattered selection, or one read per run of adjacent events, depending on
+element type, rank and layout. The default suits local storage; on
+filesystems with a high per-operation latency, such as cluster filesystems,
+fewer and larger reads pay off, so raise it there. Variable-length elements
+like strings are always read selectively. Can also be set per environment
+as the preference "scatter_bulk_max_bytes".
 
 See also [`LegendHDF5IO.scatter_bulk_max_waste`](@ref).
 """
@@ -383,9 +384,10 @@ Factor by which a scattered read may exceed the requested amount of data
 when it reads the whole index span its events cover (4 by default).
 
 Densely covered spans are read as a whole however large they are, so
-raising this trades reading more data for fewer read operations. See also
-[`LegendHDF5IO.scatter_bulk_max_bytes`](@ref). Can also be set per
-environment as the preference "scatter_bulk_max_waste".
+raising this trades reading more data for fewer read operations. Spans up
+to [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) are read as a whole
+regardless. Can also be set per environment as the preference
+"scatter_bulk_max_waste".
 """
 const scatter_bulk_max_waste = Ref(4)
 
@@ -398,9 +400,9 @@ function _getindex_scattered_lastdim(
     isempty(ilast) && return lh[front..., 1:0]
     lo, hi = Int.(extrema(ilast))
     # For small or densely covered index spans a single bounding read is
-    # cheaper than any scattered read, and gathers from it in any index order.
-    # Variable-length elements like strings are always read selectively, since
-    # the size of their payload is unknown up front:
+    # cheaper than any scattered read, and the result is gathered from it in
+    # any index order. Variable-length elements like strings are always read
+    # selectively, since the size of their payload is unknown up front:
     if isbitstype(T)
         row_bytes = sizeof(T) * prod(Base.front(size(lh)))
         span_bytes = (hi - lo + 1) * row_bytes
@@ -757,7 +759,7 @@ _append_impl!(dest::LH5VoV, src::VectorOfVectors) = begin
     try
         dest_ptr = ArraysOfArrays.internal_element_ptr(dest)
         old_len = last(dest_ptr) - first(dest_ptr)
-        # The element pointers were read when dest was opened, another handle
+        # The element pointers date from when dest was opened. Another handle
         # may have appended since, and appending from stale pointers corrupts
         # the array:
         length(dset) == length(dest) && length(fused(dest)) == old_len || throw(ArgumentError(
@@ -820,8 +822,8 @@ end
 _append_impl!(dest::LH5Table, src::EncodedArray) =
     throw(ArgumentError("Cannot append an encoded array to a table"))
 
-# These claim no new behaviour, they only resolve the signatures that the
-# append! methods of EncodedArrays and StructArrays would make ambiguous:
+# These add no behaviour, they only resolve ambiguities with the append!
+# methods of EncodedArrays and StructArrays:
 Base.append!(dest::LH5Array{T, 1}, src::EncodedArray) where {T} = _append_impl!(dest, src)
 Base.append!(dest::LH5Table, src::EncodedArray) = _append_impl!(dest, src)
 Base.append!(dest::StructArrays.StructVector{T, <:LH5TableColumns},
@@ -866,20 +868,23 @@ Constructor:
 LHDataStore(h5ds::HDF5.H5DataStore, usechunks::Bool, compress::Symbol = :none)
 ```
 
-To read from or write to ".lh5" files directly (without using `HDF5.h5open`
-first), use [`lh5open`](@ref).
+To open ".lh5" files directly, without `HDF5.h5open`, use [`lh5open`](@ref).
 
 `getindex(lh::LHDataStore, s)` returns the output of [`LH5Array`](@ref)
-applied to `lh.data_store[s]`, so arrays are wrapped lazily. `setindex!`
-creates and writes `HDF5.Group`s and `HDF5.Dataset`s. With `usechunks = true`
-datasets are created chunked and extensible, so they can later be extended
-with `append!`; the chunk size is taken from the first array written. With
-`compress` set to `:zstd` or `:deflate`, datasets are chunked and compressed, with chunks of at most 1 MiB. Supported
-value types include `RealQuantity` and arrays thereof, `Bool`, `String`,
-`Symbol`, `Enum`s, (arrays of) `NTuple`s and `StaticVector`s,
-`ArraysOfSimilarArrays`, `VectorOfVectors`, encoded arrays, `NamedTuple`s,
-tables, `AbstractVector{<:RDWaveform}` and `Histogram`. **For arrays, the
-last axis is assumed to correspond to the event number index.**
+applied to `lh.data_store[s]`, so arrays other than those of `Enum`s,
+`StaticVector`s, `NTuple`s and `Measurement`s are wrapped lazily. `setindex!`
+creates and writes `HDF5.Group`s and `HDF5.Dataset`s.
+
+With `usechunks = true`, array datasets are created chunked, so `append!` can
+extend them, and the first array written sets the chunk size. With
+`compress` set to `:zstd` or `:deflate`, array datasets are chunked and
+compressed, with chunks of at most 1 MiB.
+
+Supported value types include `RealQuantity` and arrays thereof, `Bool`,
+`String`, `Symbol`, `Enum`s, (arrays of) `NTuple`s and `StaticVector`s,
+`ArrayOfSimilarArrays`, `VectorOfVectors`, encoded arrays, `NamedTuple`s,
+tables, `AbstractVector{<:RDWaveform}` and `Histogram`. **For arrays, the last
+axis is assumed to correspond to the event number index.**
 
 # Example
 
@@ -1247,10 +1252,10 @@ end
 
 Open a LEGEND HDF5 file and return an [`LHDataStore`](@ref) object.
 
-With `usechunks = true`, newly written datasets are chunked and can be
-extended with `append!`. `compress` selects dataset compression: `true` or
-`:zstd` for Zstandard, `:deflate` (alias `:gzip`) for shuffle plus deflate;
-compressed datasets are always chunked. LEGEND HDF5 files typically use the
+With `usechunks = true`, newly written array datasets are chunked and can be
+extended with `append!`. `compress` selects their compression: `true` or
+`:zstd` for Zstandard, `:deflate` (alias `:gzip`) for shuffle plus deflate.
+Compressed datasets are always chunked. LEGEND HDF5 files typically use the
 file extension ".lh5".
 """
 function lh5open(filename::AbstractString, access::AbstractString = "r";
@@ -1293,7 +1298,7 @@ function add_entries!(lhd::LHDataStore, i::AbstractString,
 
     length(dest) == length(src) || throw(DimensionMismatch(
         "Cannot add columns of length $(length(src)) to table of length $(length(dest))"))
-    # dest may predate earlier additions, the stored column list is current:
+    # dest may predate earlier additions, so the stored column list is used:
     stored = propertynames(LH5Array(lhd.data_store[i]))
     add_entries!(lhd, i, StructArrays.components(src), StructArrays.components(dest))
     setdatatype!(lhd.data_store[i], StructArray{NamedTuple{(stored..., keys(StructArrays.components(src))...)}})

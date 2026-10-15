@@ -5,27 +5,26 @@
 
 A table stored in an LH5 file whose columns are opened on demand.
 
-Reading a table returns one of these. Accessing a column, by
-`tbl.colname`, `getproperties` or the Tables.jl interface, opens that
-column and no other. Anything that treats the table as an array
-(broadcasting, indexing, iteration) opens all of them, as it must.
+Reading a table returns one of these. Accessing a column, with
+`tbl.colname` or `Tables.getcolumn`, opens that column and no other.
+Anything that treats the table as an array (broadcasting, indexing,
+iteration) opens all of them, as it must.
 
 # Extended help
 
 Opening a column reads its "datatype" attribute, and for a vector of
-vectors its `cumulative_length` as well. Those live in the dataset's
-object header, which HDF5 places next to the column's data rather than
-next to the other headers, so opening a wide table eagerly costs one
-scattered read per column plus the `cumulative_length` arrays. On a
-cluster filesystem that is the dominant cost of opening a file whose
-columns are mostly unused.
+vectors its `cumulative_length` as well. The attribute lives in the
+dataset's object header, which HDF5 usually places next to the column's
+data rather than next to the other headers, so opening a wide table
+eagerly costs one scattered read per column plus the `cumulative_length`
+arrays. On a network file system that is the dominant cost of opening a
+file whose columns are mostly unused.
 
-Neither the column names nor their types are part of the type, so
-opening a file compiles nothing that depends on the table's shape.
-Column access is therefore not inferrable, which costs nothing in
-practice: the datatype attributes are only read at run time, so code
-that loops over rows has to pass the selected columns through a function
-boundary either way.
+Neither the column names nor the column types are type parameters, so
+opening a table compiles no code specialized on them. Column access is
+therefore not inferable, which costs little in practice: the datatype
+attributes are only read at run time, so code that loops over rows has to
+pass the selected columns through a function boundary either way.
 """
 mutable struct LH5LazyTable
     data_store::HDF5.H5DataStore
@@ -46,7 +45,7 @@ _table_lock(tbl::LH5LazyTable) = getfield(tbl, :lock)
 
 Base.propertynames(tbl::LH5LazyTable) = (_table_colnames(tbl)...,)
 
-# Columns may be opened from several tasks at once, the cache is shared:
+# Several tasks may open columns at once, so the shared cache is locked:
 function Base.getproperty(tbl::LH5LazyTable, name::Symbol)
     lock(_table_lock(tbl)) do
         get!(_table_columns(tbl), name) do
@@ -83,7 +82,7 @@ end
     _reopened_table(tbl::LH5LazyTable)
 
 Drop the cached columns, reopen them and return them as a `StructArray`.
-Writes go through this, since columns cached by `tbl` may have been
+Table appends go through this, since columns cached by `tbl` may have been
 appended to or replaced through other handles in the meantime.
 """
 function _reopened_table(tbl::LH5LazyTable)
@@ -110,7 +109,7 @@ Base.size(tbl::LH5LazyTable) = (length(tbl),)
 Base.isempty(tbl::LH5LazyTable) = length(tbl) == 0
 Base.firstindex(tbl::LH5LazyTable) = 1
 Base.lastindex(tbl::LH5LazyTable) = length(tbl)
-# Rows are what indexing and iteration, and so eachindex and pairs, run over:
+# Indexing and iteration, and so eachindex and pairs, run over rows:
 Base.keys(tbl::LH5LazyTable) = Base.OneTo(length(tbl))
 
 # Lazy tables are not arrays, so Base would silently collect them into a
