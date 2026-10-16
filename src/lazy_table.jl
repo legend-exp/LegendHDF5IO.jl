@@ -112,6 +112,11 @@ Base.lastindex(tbl::LH5LazyTable) = length(tbl)
 # Indexing and iteration, and so eachindex and pairs, run over rows:
 Base.keys(tbl::LH5LazyTable) = Base.OneTo(length(tbl))
 
+# Lazy tables are not arrays, so Base would silently collect them into a
+# vector of handles:
+Base.vcat(::LH5LazyTable, ::LH5LazyTable...) = throw(ArgumentError(
+    "Lazy tables cannot be concatenated, read them with tbl[:] or StructArray(tbl) first"))
+
 # Left deliberately narrow: a bare `idxs...` is ambiguous with Indexing.jl's
 # dictionary-indexed getindex/view.
 const _TableIndex = Union{Integer, AbstractVector, Colon}

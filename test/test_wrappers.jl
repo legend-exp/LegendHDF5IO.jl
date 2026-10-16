@@ -674,6 +674,14 @@ using Unitful
             end
 
             lh5open(fn, "r") do lhd
+                # concatenating lazy tables is not supported yet, read them first:
+                tbl = lhd["tbl"]
+                @test_throws ArgumentError vcat(tbl, tbl)
+                @test_throws ArgumentError reduce(vcat, [tbl, tbl])
+                @test length(vcat(tbl[:], tbl[:])) == 2n
+            end
+
+            lh5open(fn, "r") do lhd
                 tbl = lhd["tbl"]
                 # selecting columns must not open the ones it skipped:
                 sel = map(name -> Tables.getcolumn(tbl, name), (:a, :b))

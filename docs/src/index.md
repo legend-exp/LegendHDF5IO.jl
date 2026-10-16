@@ -75,7 +75,8 @@ Reading `lhd["evt"]` returns an `LH5LazyTable`; `lhd["evt"][:]`, or indexing
 with a range, reads the rows into a `StructArray`. A table handle keeps the
 column names it was opened with: columns added through other handles are not
 visible to it, reading a column deleted elsewhere fails, and `append!` refuses
-when the set of column names has changed.
+when the set of column names has changed. Lazy tables cannot be concatenated
+with `vcat`; read them first.
 
 Scattered reads either read the whole index span the events cover, or the
 events themselves. The thresholds for that choice,
