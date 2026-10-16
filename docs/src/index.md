@@ -39,7 +39,9 @@ or written, so selecting columns with
 the columns without reading their values. `map` is eager, as in Base. Datasets
 opened for writing can be modified in place within their current size
 (`E[1:10] = ...`); `append!` grows them. Nested structures (`NamedTuple`s,
-tables, waveforms) are represented as HDF5 groups.
+tables, waveforms) are represented as HDF5 groups. Views of empty ranges and
+empty elements of lazily read vectors of vectors are not supported by
+DiskArrays yet; read such data with `[:]` first.
 
 ### Tables and waveforms
 
