@@ -580,6 +580,58 @@ using Unitful
                     append!(orig, StructArray((v = VectorOfVectors([[6, 7]]),)))
                     @test lhd["tbl_vov"][:] == StructArray((v = VectorOfVectors([[1], [2, 3], [4, 5], [6, 7]]),))
                 end
+                @testset "append tables with waveform and nested columns" begin
+                    trng = range(0.0u"μs", 10.0u"μs"; length = 4)
+                    wf = ArrayOfRDWaveforms((fill(trng, 2), VectorOfSimilarVectors(rand(UInt16, 4, 2))))
+                    tbl = StructArray((e = [1.0, 2.0], wf = wf, sub = StructArray((v = VectorOfVectors([[1, 2], [3]]),))))
+                    lhd["tbl_wf"] = tbl
+                    append!(lhd["tbl_wf"], tbl)
+                    @test lhd["tbl_wf"][:] == vcat(tbl, tbl)
+                    # columns read eagerly cannot be appended to on disk:
+                    lhd["tbl_svec"] = StructArray((s = [SVector(1, 2), SVector(3, 4)], a = [1, 2]))
+                    @test_throws ArgumentError append!(lhd["tbl_svec"], StructArray((s = [SVector(5, 6)], a = [3])))
+                    @test lhd["tbl_svec"][:].a == [1, 2]
+                    # the StructArray conversion appends waveform columns with their time axes:
+                    lhd["tbl_wf2"] = StructArray((e = [1.0, 2.0], wf = wf))
+                    s = StructArray(lhd["tbl_wf2"])
+                    append!(s, s)
+                    @test lhd["tbl_wf2"][:] == vcat(StructArray((e = [1.0, 2.0], wf = wf)), StructArray((e = [1.0, 2.0], wf = wf)))
+                    # nested tables are checked against their stored columns as well:
+                    lhd["tbl_nest"] = StructArray((a = [1, 2], sub = StructArray((b = [3, 4],))))
+                    t = lhd["tbl_nest"]
+                    t[:]
+                    add_entries!(lhd, "tbl_nest/sub", StructArray((c = [5, 6],)))
+                    @test_throws ArgumentError append!(t, StructArray((a = [7], sub = StructArray((b = [8],)))))
+                    @test length(lhd["tbl_nest/a"]) == 2 && length(lhd["tbl_nest/sub/b"]) == 2
+                end
+                @testset "append from aliased and inconsistent sources" begin
+                    lhd["tbl_alias"] = StructArray((a = [1, 2], b = [10, 20]))
+                    t = lhd["tbl_alias"]
+                    append!(t, StructArray((a = t.b, b = t.a)))
+                    @test lhd["tbl_alias"][:] == StructArray((a = [1, 2, 10, 20], b = [10, 20, 1, 2]))
+                    @test_throws ArgumentError append!(t, (a = [5, 6, 7], b = [8]))
+                    @test length(lhd["tbl_alias"]) == 4
+                    lhd["tbl_src"] = StructArray((v = VectorOfVectors([[1, 2], [3]]), a = [1, 2]))
+                    stale = lhd["tbl_src"]
+                    stale[:]
+                    append!(lhd["tbl_src"], StructArray((v = VectorOfVectors([[4]]), a = [3])))
+                    # the ragged column of the stale handle is shorter than its other column:
+                    @test_throws ArgumentError append!(lhd["tbl_src"], stale)
+                    @test length(lhd["tbl_src"]) == 3
+                end
+                @testset "append through a table handle keeps its StructArray coherent" begin
+                    lhd["tbl_coh"] = StructArray((a = [1.0, 2.0], v = VectorOfVectors([[1], [2, 3]])))
+                    t = lhd["tbl_coh"]
+                    typed = StructArray(t)
+                    append!(t, StructArray((a = [3.0], v = VectorOfVectors([[4, 5]]))))
+                    @test length(typed) == 3
+                    @test typed[3] == (a = 3.0, v = [4, 5])
+                    @test StructArray(t) === typed
+                    # appends through a StructArray conversion check the stored columns as well:
+                    add_entries!(lhd, "tbl_coh", StructArray((c = [7, 8, 9],)))
+                    @test_throws ArgumentError append!(typed, StructArray((a = [4.0], v = VectorOfVectors([[6]]))))
+                    @test lhd["tbl_coh"][:].c == [7, 8, 9]
+                end
                 @testset "append waveforms to themselves and ragged waveforms" begin
                     trng = range(0.0u"μs", 10.0u"μs"; length = 4)
                     wf = ArrayOfRDWaveforms((fill(trng, 2), VectorOfSimilarVectors(rand(UInt16, 4, 2))))
@@ -587,6 +639,12 @@ using Unitful
                     w = lhd["wf_self"]
                     append!(w, w)
                     @test lhd["wf_self"][:] == vcat(wf, wf)
+                    # a handle whose time axes predate an append elsewhere must be reopened:
+                    lhd["wf_two"] = wf
+                    h1, h2 = lhd["wf_two"], lhd["wf_two"]
+                    append!(h1, wf)
+                    @test_throws ArgumentError append!(h2, h2)
+                    @test lhd["wf_two"][:] == vcat(wf, wf)
                     times = [range(0.0u"μs", 10.0u"μs"; length = n) for n in (3, 5)]
                     ragged = ArrayOfRDWaveforms((times, VectorOfVectors([rand(UInt16, 3), rand(UInt16, 5)])))
                     lhd["wf_ragged"] = ragged
@@ -606,6 +664,28 @@ using Unitful
                     # the handle does not know column z, appending through it would corrupt the table:
                     @test_throws ArgumentError append!(stale, tbl)
                     @test lhd["tbl_stale"][:] == StructArray((x = [1, 2], y = [3, 4], z = [5, 6]))
+                end
+                @testset "append through a StructArray of replaced columns" begin
+                    lhd["tbl_sa"] = StructArray((a = [1, 2], b = [3, 4]))
+                    t = lhd["tbl_sa"]
+                    s = StructArray((a = t.a, b = t.b))
+                    delete_entry!(lhd, "tbl_sa/b")
+                    add_entries!(lhd, "tbl_sa", StructArray((b = [30, 40],)))
+                    # column b of s is the deleted dataset, appending through s would
+                    # leave the stored columns at different lengths:
+                    @test_throws ArgumentError append!(s, StructArray((a = [5], b = [50])))
+                    @test lhd["tbl_sa"][:] == StructArray((a = [1, 2], b = [30, 40]))
+                end
+                @testset "append through a StructArray of stale ragged columns" begin
+                    lhd["tbl_rag"] = StructArray((a = [1, 2], v = VectorOfVectors([[1], [2, 3]])))
+                    t = lhd["tbl_rag"]
+                    s = StructArray((a = t.a, v = t.v))
+                    append!(lhd["tbl_rag"], StructArray((a = [3], v = VectorOfVectors([[4]]))))
+                    # the element pointers of s.v predate that append, and column a
+                    # must not grow before this is noticed:
+                    @test_throws ArgumentError append!(s, StructArray((a = [5], v = VectorOfVectors([[6]]))))
+                    stored = lhd["tbl_rag"][:]
+                    @test stored.a == [1, 2, 3] && stored.v == [[1], [2, 3], [4]]
                 end
                 @testset "append to itself" begin
                     vofv = VectorOfVectors([[1, 2], [3]])
