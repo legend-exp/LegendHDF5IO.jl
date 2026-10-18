@@ -632,6 +632,13 @@ using Unitful
                     @test_throws ArgumentError append!(typed, StructArray((a = [4.0], v = VectorOfVectors([[6]]))))
                     @test lhd["tbl_coh"][:].c == [7, 8, 9]
                 end
+                @testset "adding columns after appends" begin
+                    lhd["tbl_grow"] = StructArray((v = VectorOfVectors([[1], [2, 3]]),))
+                    append!(lhd["tbl_grow"], StructArray((v = VectorOfVectors([[4]]),)))
+                    @test_throws DimensionMismatch add_entries!(lhd, "tbl_grow", StructArray((c = [7, 8],)))
+                    add_entries!(lhd, "tbl_grow", StructArray((c = [7, 8, 9],)))
+                    @test lhd["tbl_grow"][:].c == [7, 8, 9]
+                end
                 @testset "append waveforms to themselves and ragged waveforms" begin
                     trng = range(0.0u"μs", 10.0u"μs"; length = 4)
                     wf = ArrayOfRDWaveforms((fill(trng, 2), VectorOfSimilarVectors(rand(UInt16, 4, 2))))
@@ -718,12 +725,15 @@ using Unitful
                         @test add_entries!(lhd, "tbl", StructArray((y = y,))) |> isnothing
                         @test lhd["tbl"][:] == tbl
                     end
-                    @testset "adding entries with a reused destination" begin
+                    @testset "adding entries repeatedly" begin
                         lhd["tbl_dest"] = StructArray((a = [1, 2], b = [3, 4]))
-                        dest = StructArray(lhd["tbl_dest"])
-                        add_entries!(lhd, "tbl_dest", StructArray((c = [5, 6],)), dest)
-                        add_entries!(lhd, "tbl_dest", StructArray((d = [7, 8],)), dest)
+                        add_entries!(lhd, "tbl_dest", StructArray((c = [5, 6],)))
+                        add_entries!(lhd, "tbl_dest", StructArray((d = [7, 8],)))
                         @test propertynames(lhd["tbl_dest"]) == (:a, :b, :c, :d)
+                        # existing names are rejected before anything is written:
+                        @test_throws ArgumentError add_entries!(lhd, "tbl_dest", StructArray((e = [1, 2], a = [0, 0])))
+                        @test propertynames(lhd["tbl_dest"]) == (:a, :b, :c, :d)
+                        @test !haskey(lhd.data_store, "tbl_dest/e")
                     end
                 end
                 @testset verbose=true "NamedTuples" begin
@@ -743,6 +753,18 @@ using Unitful
                     delete_entry!(lhd, "nt/y")
                     @test_throws ArgumentError delete_entry!(lhd, "nt/x")
                     @test_throws DimensionMismatch add_entries!(lhd, "tbl", StructArray((z = rand(3),)))
+                    # a missing entry leaves the table and its datatype alone:
+                    @test_throws ArgumentError delete_entry!(lhd, "tbl/nope")
+                    @test lhd["tbl"] isa LegendHDF5IO.LH5LazyTable
+                    @test propertynames(lhd["tbl"]) == (:x, :y)
+                    # columns are added to a table as a table, not as a NamedTuple:
+                    @test_throws ArgumentError add_entries!(lhd, "tbl", (c = rand(length(lhd["tbl"])),))
+                    @test propertynames(lhd["tbl"]) == (:x, :y)
+                    n = length(lhd["tbl"])
+                    @test_throws ArgumentError add_entries!(lhd, "tbl", StructArray((m = reshape(rand(n), 1, n),)))
+                    @test propertynames(lhd["tbl"]) == (:x, :y)
+                    @test_throws ArgumentError add_entries!(lhd, "nt", StructArray((c = [30],)))
+                    @test lhd["nt"] isa NamedTuple
                 end
             end
         end

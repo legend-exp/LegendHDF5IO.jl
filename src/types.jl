@@ -1319,6 +1319,10 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
+# A table is a vector of rows, so its columns must be vectors:
+_check_vector_columns(cols) = all(col -> col isa AbstractVector, cols) ||
+    throw(ArgumentError("The columns of a table must be vectors"))
+
 # write tables (anything that satisfies the Tables.jl column interface)
 function create_entry(parent::LHDataStore, name::AbstractString, data;
     kwargs...)
@@ -1326,8 +1330,7 @@ function create_entry(parent::LHDataStore, name::AbstractString, data;
     Tables.istable(data) || throw(ArgumentError("Value to write, of type "
     *"$(typeof(data)), is not a table"))
     cols = Tables.columntable(data)
-    all(col -> col isa AbstractVector, cols) || throw(ArgumentError(
-        "The columns of a table to write must be vectors"))
+    _check_vector_columns(cols)
     create_entry(parent, name, cols; kwargs...)
     setdatatype!(parent.data_store[name], StructArray{NamedTuple{keys(cols)}})
     nothing
@@ -1371,51 +1374,53 @@ function lh5open(f::Function, filename::AbstractString,
 end
 
 """
-    add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray,
-        dest::StructArray=LH5Array(lhd.data_store[i]))
+    add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray)
 
-extend the table `dest` at `lhd[i]` with columns from `src`.
+Add the columns of `src` to the table at `lhd[i]`.
 """
-add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray{<:NamedTuple},
-    dest::LH5LazyTable) = add_entries!(lhd, i, src, _typed_table(dest))
-
-function add_entries!(lhd::LHDataStore, i::AbstractString,
-    src::StructArray{<:NamedTuple},
-    dest::StructArray{<:NamedTuple} = _typed_table(LH5Array(lhd.data_store[i])))
-
-    length(dest) == length(src) || throw(DimensionMismatch(
-        "Cannot add columns of length $(length(src)) to table of length $(length(dest))"))
-    # dest may predate earlier additions, so the stored column list is used:
-    stored = propertynames(LH5Array(lhd.data_store[i]))
-    add_entries!(lhd, i, StructArrays.components(src), StructArrays.components(dest))
-    setdatatype!(lhd.data_store[i], StructArray{NamedTuple{(stored..., keys(StructArrays.components(src))...)}})
+function add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray{<:NamedTuple})
+    current = LH5Array(lhd.data_store[i])
+    current isa LH5LazyTable || throw(ArgumentError(
+        "\"$i\" is not a table, add entries to a NamedTuple as a NamedTuple"))
+    _check_vector_columns(StructArrays.components(src))
+    length(current) == length(src) || throw(DimensionMismatch(
+        "Cannot add columns of length $(length(src)) to table of length $(length(current))"))
+    names = _add_entries!(lhd, i, StructArrays.components(src), propertynames(current))
+    setdatatype!(lhd.data_store[i], StructArray{NamedTuple{names}})
     nothing
 end
 
 """
-    add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
-        dest::NamedTuple=LH5Array(lhd.data_store[i]))
+    add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple)
 
-extend the NamedTuple `dest` at `lhd[i]` with elements from `src`.
+Add the entries of `src` to the `NamedTuple` at `lhd[i]`.
 """
-function add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
-    dest::NamedTuple=LH5Array(lhd.data_store[i]))
-
-    new_nt = (;dest..., src...)
-    for k in keys(src)
-        lhd["$(i)/$(k)"] = src[k]
-    end
-    setdatatype!(lhd.data_store[i], typeof(new_nt))
+function add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple)
+    current = LH5Array(lhd.data_store[i])
+    current isa NamedTuple || throw(ArgumentError(
+        "\"$i\" is not a NamedTuple, add columns to a table as a StructArray"))
+    names = _add_entries!(lhd, i, src, keys(current))
+    setdatatype!(lhd.data_store[i], NamedTuple{names})
     nothing
 end
 export add_entries!
 
+# Writes the entries and returns the new list of names. The names come from
+# the file, since a handle may predate earlier additions:
+function _add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple, stored)
+    clash = intersect(stored, keys(src))
+    isempty(clash) || throw(ArgumentError("\"$i\" already has entries $clash"))
+    for k in keys(src)
+        lhd["$(i)/$(k)"] = src[k]
+    end
+    (stored..., keys(src)...)
+end
+
 """
     delete_entry!(lhd::LHDataStore, i::AbstractString)
 
-remove the dataset `lhd[i]` and adjust the datatype of the parent if necessary. 
-Currently supported are elements of `NamedTuple`s, tables or
-`HDF5.Group`s.
+Remove the dataset `lhd[i]` and adjust the datatype of the parent if necessary.
+Supported are entries of `NamedTuple`s, tables and `HDF5.Group`s.
 """
 function delete_entry!(lhd::LHDataStore, i::AbstractString)
     parent, child = splitdir(i)
@@ -1427,27 +1432,29 @@ function delete_entry!(lhd::LHDataStore, i::AbstractString)
 end
 export delete_entry!
 
-function _delete_entry(lhd::LHDataStore, nt::NamedTuple, 
+function _remaining_entries(stored, parent::AbstractString, child::AbstractString)
+    Symbol(child) in stored || throw(ArgumentError("\"$parent\" has no entry \"$child\""))
+    remaining = filter(!=(Symbol(child)), stored)
+    isempty(remaining) && throw(ArgumentError("Cannot delete last entry \"$child\" of \"$parent\""))
+    remaining
+end
+
+function _delete_entry(lhd::LHDataStore, nt::NamedTuple,
     parent::AbstractString, child::AbstractString)
 
-    if hasattribute(lhd.data_store[parent], :datatype)
-        newkeys = setdiff(keys(nt), (Symbol(child),))
-        isempty(newkeys) && throw(ArgumentError("Cannot delete last entry \"$child\" of \"$parent\""))
-        new_nt = (;[k => nt[k] for k in newkeys]...)
-        setdatatype!(lhd.data_store[parent], typeof(new_nt))
-    end
+    remaining = _remaining_entries(keys(nt), parent, child)
     HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
+    if hasattribute(lhd.data_store[parent], :datatype)
+        setdatatype!(lhd.data_store[parent], NamedTuple{remaining})
+    end
     nothing
 end
 
-_delete_entry(lhd::LHDataStore, tbl::LH5LazyTable, parent::AbstractString,
-    child::AbstractString) = _delete_entry(lhd, _typed_table(tbl), parent, child)
-
-function _delete_entry(lhd::LHDataStore, tbl::StructArray{<:NamedTuple},
+function _delete_entry(lhd::LHDataStore, tbl::LH5LazyTable,
     parent::AbstractString, child::AbstractString)
 
-    _delete_entry(lhd, StructArrays.components(tbl), parent, child)
-    newkeys = filter(!=(Symbol(child)), propertynames(tbl))
-    setdatatype!(lhd.data_store[parent], StructArray{NamedTuple{newkeys}})
+    remaining = _remaining_entries(propertynames(tbl), parent, child)
+    HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
+    setdatatype!(lhd.data_store[parent], StructArray{NamedTuple{remaining}})
     nothing
 end
