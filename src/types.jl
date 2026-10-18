@@ -132,6 +132,8 @@ LH5Array(ds::HDF5.Dataset,
 ::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
     VectorOfSimilarArrays(LH5Array(ds, AbstractArray{<:RealQuantity}))
 end
+LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArrayOfSimilarArrays{<:Bool}}) =
+    VectorOfSimilarArrays(LH5Array(ds, AbstractArray{<:Bool}))
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:NamedTuple{T}}) where T
 
@@ -306,7 +308,28 @@ end
 
 Base.getindex(lh::LH5Array{T, N},
     idxs::Vararg{Union{HDF5.IndexType, AbstractVector{<:Integer}}, N}
-) where {T, N} = _getindex_impl(lh, idxs...)
+) where {T, N} = begin
+    inds = to_indices(lh, idxs)
+    checkbounds(lh, inds...)
+    # Empty selections would reach code in DiskArrays and HDF5 that cannot
+    # handle them, and HDF5 hyperslabs cannot step backwards:
+    any(isempty, inds) && return similar(Array{T}, Base.index_shape(inds...))
+    any(_descending, idxs) && return _getindex_reversed(lh, idxs)
+    _getindex_impl(lh, idxs...)
+end
+
+# Masks over the whole array select linearly, as in Base:
+Base.getindex(lh::LH5Array{T, N}, mask::AbstractArray{Bool, N}) where {T, N} =
+    lh[LinearIndices(lh)[_materialize(mask)]]
+
+_descending(::Any) = false
+_descending(r::AbstractRange) = step(r) < 0
+
+function _getindex_reversed(lh::LH5Array, idxs)
+    out = lh[map(i -> _descending(i) ? reverse(i) : i, idxs)...]
+    kept = filter(k -> !(idxs[k] isa Integer), eachindex(idxs))
+    reverse(out; dims = Tuple(findall(k -> _descending(idxs[k]), kept)))
+end
 
 _getindex_impl(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
@@ -330,7 +353,7 @@ _getindex_impl(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
     finally
         close(dtype)
     end
-    _read_result(val, UInt8, idxs...) .> 0
+    map(!iszero, _read_result(val, UInt8, idxs...))
 end
 
 # HDF5 converts strings itself when asked for String:
@@ -403,11 +426,11 @@ function _getindex_scattered_lastdim(
 ) where {T, N, M}
     isempty(ilast) && return lh[front..., 1:0]
     lo, hi = Int.(extrema(ilast))
-    # For small or densely covered index spans a single bounding read is
-    # cheaper than any scattered read, and the result is gathered from it in
-    # any index order. Variable-length elements like strings are always read
+    # A small or densely covered index span is cheaper to read as a whole
+    # than by any scattered read, and the result is gathered from it in any
+    # index order. Variable-length elements like strings are always read
     # selectively, since the size of their payload is unknown up front:
-    if isbitstype(T)
+    if isbitstype(T) && T <: Number
         row_bytes = sizeof(T) * prod(Base.front(size(lh)))
         span_bytes = (hi - lo + 1) * row_bytes
         if span_bytes <= scatter_bulk_max_bytes[] ||
@@ -430,7 +453,7 @@ function _getindex_scattered_sparse(
     # selections onto chunks slowly, while sorted per-run reads make good use
     # of the chunk cache). Both read raw bytes, so element types that HDF5
     # has to convert, like strings, always take the per-run path:
-    if isbitstype(T) && all(i -> i isa Colon, front) && (N == 1 || _is_contiguous(lh.file))
+    if isbitstype(T) && T <: Number && all(i -> i isa Colon, front) && (N == 1 || _is_contiguous(lh.file))
         return _getindex_scattered_single_read(lh, ilast)
     end
     _getindex_scattered_runs(lh, front, ilast)
@@ -562,7 +585,7 @@ end
 
 # Bool datasets are stored as UInt8:
 _read_selection(ds::HDF5.Dataset, ::Type{Bool}, fspace::HDF5.Dataspace, dims::Dims) =
-    _read_selection(ds, UInt8, fspace, dims) .> 0
+    map(!iszero, _read_selection(ds, UInt8, fspace, dims))
 
 _getindex_impl(lh::LH5Array{T, N},
     idxs::Vararg{Union{HDF5.IndexType, AbstractVector{<:Integer}}, N}
@@ -668,9 +691,12 @@ Base.setindex!(lh::LH5Array{T, 1}, v::EncodedArray, ::Colon) where {T} =
 DiskArrays.haschunks(lh::LH5Array) =
     isnothing(_chunk_dims(lh.file)) ? DiskArrays.Unchunked() : DiskArrays.Chunked()
 
-function DiskArrays.eachchunk(lh::LH5Array)
+# The return type is asserted since HDF5 property lists are not inferable,
+# and DiskArrays iterates through the chunk grid:
+function DiskArrays.eachchunk(lh::LH5Array{T, N}
+)::DiskArrays.GridChunks{N, NTuple{N, DiskArrays.RegularChunks}} where {T, N}
     chunk = _chunk_dims(lh.file)
-    isnothing(chunk) || return DiskArrays.GridChunks(lh, chunk)
+    isnothing(chunk) || return DiskArrays.GridChunks(lh, chunk::Dims{N})
     # DiskArrays cannot estimate a chunk size for an empty array:
     isempty(lh) ? DiskArrays.GridChunks(lh, max.(size(lh), 1)) : DiskArrays.estimate_chunksize(lh)
 end
@@ -691,17 +717,22 @@ end
 # qualify. Bool datasets hold bytes to compare and strings need conversion:
 const _NativeNumber = Union{AbstractFloat, Signed, Unsigned}
 
-Base.copyto!(dest::Array{T, N}, src::LH5Array{T, N}) where {T<:_NativeNumber, N} =
+function Base.copyto!(dest::Array{T, N}, src::LH5Array{T, N}) where {T<:_NativeNumber, N}
+    length(dest) == length(src) || return invoke(copyto!, Tuple{Array, LH5Array}, dest, src)
     copyto!(dest, src.file, ntuple(_ -> Colon(), Val(N))...)
+    dest
+end
 Base.copyto!(dest::Array, src::LH5Array{T, N}) where {T, N} =
     copyto!(dest, src[ntuple(_ -> Colon(), Val(N))...])
 
-# Deep conversion of lazily read data into in-memory objects:
+# Deep conversion of lazily read data into in-memory objects. Nested arrays
+# are rebuilt around their materialized data:
 
 _materialize(x) = x
 _materialize(A::DiskArrays.AbstractDiskArray) = Array(A)
-_materialize(A::LH5VoV) = VectorOfVectors(_materialize(A.data), copy(A.elem_ptr))
-_materialize(A::LH5AoSA{T, M}) where {T, M} =
+_materialize(A::VectorOfVectors) =
+    VectorOfVectors(_materialize(A.data), copy(ArraysOfArrays.internal_element_ptr(A)))
+_materialize(A::ArrayOfSimilarArrays{T, M}) where {T, M} =
     ArrayOfSimilarArrays{T, M}(_materialize(A.data))
 _materialize(x::NamedTuple) = map(_materialize, x)
 _materialize(A::StructArray{<:NamedTuple}) =

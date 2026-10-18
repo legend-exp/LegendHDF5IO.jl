@@ -267,7 +267,7 @@ using Unitful
                 lhd["b"] = b
                 spb = [1, 3, 4, 2^20 + 3]
                 @test lhd["b"][spb] == b[spb]
-                @test lhd["b"][spb] isa BitVector
+                @test lhd["b"][spb] isa Vector{Bool}
 
                 # scattered reads of long strings fetch the selected elements only:
                 long = repeat('x', 16384)
@@ -313,6 +313,12 @@ using Unitful
                 lhd["strs"] = ["x$i" for i in 1:50]
                 lhd["empty"] = Float32[]
                 lhd["empty2d"] = zeros(Int, 3, 0)
+                lhd["small"] = Float32[1, 2, 3]
+                lhd["bvsv"] = VectorOfSimilarVectors([true false true; false true false])
+                # other writers may store bytes other than 0 and 1:
+                lhd.data_store["bvsv"][1, 2] = 0x02
+                # a variable-length dataset without an LH5 datatype:
+                lhd.data_store["vl"] = HDF5.VLen([Float64[i, i + 1] for i in 1:2000])
             end
             lh5open(joinpath(dir, "diskarrays_chunked.lh5"), "cw", usechunks = true) do lhd
                 lhd["wf"] = VectorOfSimilarVectors(data)
@@ -353,7 +359,43 @@ using Unitful
                 @test @inferred(W.data[:, [2, 5, 2999]]) == data[:, [2, 5, 2999]]
                 @test W.data[:, mask[1:3000]] == data[:, mask[1:3000]]
 
+                # empty selections give empty arrays of the right shape:
+                M = W.data
+                @test size(M[falses(100), :]) == (0, 3000)
+                @test size(M[falses(100, 3000)]) == (0,)
+                @test size(M[Int[], [1, 3000]]) == (0, 2)
+                @test size(M[:, Int[]]) == (100, 0)
+                @test X[Int[]] == Float32[] * u"keV"
+                # reversed ranges and out-of-bounds indices behave as in Base:
+                @test M[:, 10:-1:1] == data[:, 10:-1:1]
+                @test X[10:-2:1] == x[10:-2:1] * u"keV"
+                @test_throws BoundsError X[50_001]
+                @test_throws BoundsError X[49_999:50_001]
+                @test_throws BoundsError M[101, 1]
+                # the chunk grid is inferable, so iteration stays typed:
+                @test cumsum(X) isa Vector{<:Quantity{Float32}}
+                # copyto! follows Base: the common length is copied and dest returned
+                d = zeros(Float32, 5)
+                @test copyto!(d, lhd["small"]) === d
+                @test d == Float32[1, 2, 3, 0, 0]
+
                 @test count(lhd["flags"]) == count(flags)
+                # Bool datasets read as arrays of Bool, in every shape:
+                B = lhd["flags"]
+                @test B[:] isa Vector{Bool}
+                @test collect(B) isa Vector{Bool}
+                BV = lhd["bvsv"]
+                @test eltype(flatview(BV)) == Bool
+                @test BV[:] == [[true, false], [true, true], [true, false]]
+                # variable-length numeric elements are converted on every read path:
+                VL = lhd["vl"]
+                saved = LegendHDF5IO.scatter_bulk_max_bytes[], LegendHDF5IO.scatter_bulk_max_waste[]
+                LegendHDF5IO.scatter_bulk_max_bytes[] = LegendHDF5IO.scatter_bulk_max_waste[] = 0
+                try
+                    @test VL[[1, 3, 1500]] == [[1.0, 2.0], [3.0, 4.0], [1500.0, 1501.0]]
+                finally
+                    LegendHDF5IO.scatter_bulk_max_bytes[], LegendHDF5IO.scatter_bulk_max_waste[] = saved
+                end
 
                 # masks must match the axis they index:
                 @test_throws BoundsError X[mask[1:10]]

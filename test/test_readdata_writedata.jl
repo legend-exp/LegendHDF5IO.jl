@@ -38,6 +38,13 @@ end
         @test _roundtrip(evt_pulser) === evt_pulser
         @test _roundtrip(daq_gerda) === daq_gerda
         @test _roundtrip((1.0, 2.0, 3.0)) === (1.0, 2.0, 3.0)
+        # a scalar dataset without an LH5 datatype attribute reads as a scalar:
+        mktempdir(pwd()) do tmp
+            HDF5.h5open(joinpath(tmp, "plain.h5"), "w") do f
+                f["plain"] = 3.5
+                @test readdata(f, "plain") === 3.5
+            end
+        end
     end
 
     @testset "arrays" begin
@@ -68,6 +75,9 @@ end
         @test _roundtrip(vosv) == vosv
         vom = VectorOfSimilarArrays(rand(3, 4, 5))
         @test _roundtrip(vom) == vom
+        # nested ragged arrays are read eagerly as well, the result outlives the file:
+        vvv = VectorOfVectors(VectorOfVectors([[1, 2], [3], [4]]), [1, 3, 4])
+        @test _roundtrip(vvv) == vvv
     end
 
     @testset "encoded arrays" begin
