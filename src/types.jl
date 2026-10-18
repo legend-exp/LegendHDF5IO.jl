@@ -416,7 +416,7 @@ to [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) are read as a whole
 regardless. Can also be set per environment as the preference
 "scatter_bulk_max_waste".
 """
-const scatter_bulk_max_waste = Ref(4)
+const scatter_bulk_max_waste = Ref(4.0)
 
 _select_lastdim(A::AbstractArray{<:Any, K}, i) where {K} =
     A[ntuple(_ -> Colon(), Val(K - 1))..., i]
@@ -1046,6 +1046,9 @@ mutable struct LHDataStore <: AbstractDict{String,Any}
     data_store::HDF5.H5DataStore
     usechunks::Bool
     compress::Symbol
+
+    LHDataStore(data_store::HDF5.H5DataStore, usechunks::Bool, compress::Symbol) =
+        new(data_store, usechunks, _compress_mode(compress))
 end
 
 LHDataStore(data_store::HDF5.H5DataStore, usechunks::Bool) =
@@ -1178,11 +1181,13 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
-# write AbstractArray{<:Real} and AbstractArray{String}
+# write AbstractArray{<:Real} and AbstractArray{<:AbstractString}
 function create_entry(parent::LHDataStore, name::AbstractString,
     data::AbstractArray{T}; usechunks::Bool=false, compress::Symbol=:none
-) where {T<:Union{Real, String}}
+) where {T<:Union{Real, AbstractString}}
 
+    T <: AbstractString && T !== String && return create_entry(parent, name,
+        convert(Array{String}, data); usechunks = usechunks, compress = compress)
     dtype = HDF5.datatype(T)
     ds = if !usechunks && compress === :none
         HDF5.create_dataset(parent.data_store, name, dtype, size(data))
@@ -1412,7 +1417,8 @@ file extension ".lh5".
 function lh5open(filename::AbstractString, access::AbstractString = "r";
     usechunks::Bool = false, compress::Union{Bool,Symbol} = false)
 
-    LHDataStore(HDF5.h5open(filename, access), usechunks, _compress_mode(compress))
+    mode = _compress_mode(compress)
+    LHDataStore(HDF5.h5open(filename, access), usechunks, mode)
 end
 export lh5open
 

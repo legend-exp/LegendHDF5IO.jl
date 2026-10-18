@@ -222,6 +222,9 @@ using Unitful
                     LegendHDF5IO.scatter_bulk_max_waste[] = 0
                     @test A[tune] == x[tune]
                     @test W[tune] == VectorOfSimilarVectors(data)[tune]
+                    # the waste factor need not be an integer:
+                    LegendHDF5IO.scatter_bulk_max_waste[] = 2.5
+                    @test A[tune] == x[tune]
                     LegendHDF5IO.scatter_bulk_max_bytes[] = typemax(Int)
                     @test A[tune] == x[tune]
                     @test W[tune] == VectorOfSimilarVectors(data)[tune]
@@ -316,6 +319,7 @@ using Unitful
                 lhd["small"] = Float32[1, 2, 3]
                 lhd["small2d"] = collect(reshape(1:9, 3, 3))
                 lhd["vov_e"] = VectorOfVectors([Float32[1, 2], Float32[], Float32[3]])
+                lhd["sub"] = split("a b c")
                 lhd["bvsv"] = VectorOfSimilarVectors([true false true; false true false])
                 # other writers may store bytes other than 0 and 1:
                 lhd.data_store["bvsv"][1, 2] = 0x02
@@ -428,6 +432,8 @@ using Unitful
                 V = lhd["vov_e"]
                 @test collect(V[2]) == Float32[]
                 @test V[2] == Float32[] && V[[1, 2]] == [Float32[1, 2], Float32[]]
+                # strings of any kind are written as strings:
+                @test lhd["sub"][:] == ["a", "b", "c"]
             end
             lh5open(joinpath(dir, "diskarrays_chunked.lh5")) do lhd
                 W = lhd["wf"].data
@@ -531,6 +537,10 @@ using Unitful
 
     @testset verbose=true "compressed writing" begin
         mktempdir(pwd()) do tmp
+            HDF5.h5open(joinpath(tmp, "modes.lh5"), "w") do f
+                @test_throws ArgumentError LHDataStore(f, true, :lz4)
+                @test LHDataStore(f, true, :gzip).compress == :deflate
+            end
             for mode in (:zstd, :deflate)
                 path = joinpath(tmp, "tmp_$(mode).lh5")
                 lh5open(path, "cw"; compress=mode) do lhd
@@ -547,6 +557,10 @@ using Unitful
                 end
             end
             @test_throws ArgumentError lh5open(joinpath(tmp, "x.lh5"), "cw", compress=:lzf)
+            keep = joinpath(tmp, "keep.lh5")
+            lh5open(lhd -> lhd["x"] = [1, 2, 3], keep, "w")
+            @test_throws ArgumentError lh5open(keep, "w"; compress = :lzf)
+            @test lh5open(lhd -> lhd["x"][:], keep) == [1, 2, 3]
             # compressed chunks are capped, so a partial read decompresses little more than it needs:
             x = rand(Float32, 2^20)
             m = rand(UInt16, 50, 2^16)
