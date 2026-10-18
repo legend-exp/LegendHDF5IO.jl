@@ -45,12 +45,16 @@ end
 const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, LH5Array{T, L}}
 const VectorOfRDWaveforms{T, U, VVT, VVU} = ArrayOfRDWaveforms{T, U, 1, VVT, VVU}
 const LH5VoV{T} = VectorOfVectors{T, LH5Array{T, 1}}
-const LH5TableColumn = Union{LH5Array{<:Any, 1}, LH5VoV, LH5AoSA{<:Any, <:Any, 1}}
-const LH5TableColumns = NamedTuple{names, <:Tuple{Vararg{LH5TableColumn}}} where names
-const LH5Table = StructArrays.StructVector{<:NamedTuple, <:LH5TableColumns}
 const LH5ArrayOfRDWaveforms{T, U, N, VVT} = 
     ArrayOfRDWaveforms{T, U, N, VVT, <:Union{LH5VoV{U}, LH5AoSA{U}}}
 const LH5VectorOfRDWaveforms{T, U} = LH5ArrayOfRDWaveforms{T, U, 1}
+# StructArrays of disk-backed columns, with tables nested one level deep.
+# StructArrays would slice and append them with the disk-backed row type:
+const LH5TableColumn = Union{LH5Array{<:Any, 1}, LH5VoV, LH5AoSA{<:Any, <:Any, 1}, LH5VectorOfRDWaveforms}
+const LH5FlatTableColumns = NamedTuple{names, <:Tuple{Vararg{LH5TableColumn}}} where names
+const LH5TableColumns = NamedTuple{names, <:Tuple{Vararg{Union{LH5TableColumn,
+    StructArrays.StructVector{<:NamedTuple, <:LH5FlatTableColumns}}}}} where names
+const LH5Table = StructArrays.StructVector{<:NamedTuple, <:LH5TableColumns}
 
 LH5Array{T}(f::HDF5.Dataset) where {T} = LH5Array{T, _ndims(f)}(f)
 LH5Array(f::Union{HDF5.Dataset, HDF5.H5DataStore}) = LH5Array(f, getdatatype(f))
@@ -747,35 +751,74 @@ Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} =
 _append_impl!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
     x = convert(Array{T, N}, src)
     old_size = size(dest)
-    new_size = (old_size[1:N-1]..., old_size[N] + size(src, N))
-    from, to = old_size[N] + 1, new_size[N]
-    indices = (ntuple(_ -> Colon(), Val(N - 1))..., from:to)
+    Base.front(size(x)) == Base.front(old_size) || throw(DimensionMismatch(
+        "Cannot append an array of size $(size(x)) to an array of size $old_size along the last dimension"))
+    new_size = (Base.front(old_size)..., old_size[N] + size(x, N))
+    indices = (ntuple(_ -> Colon(), Val(N - 1))..., (old_size[N] + 1):new_size[N])
     HDF5.set_extent_dims(dest.file, new_size)
-    dest.file[indices...] = _ustrip(x)
+    try
+        dest.file[indices...] = _ustrip(x)
+    catch
+        # The extension would otherwise stay behind, filled with fill values:
+        HDF5.set_extent_dims(dest.file, old_size)
+        rethrow()
+    end
     dest
 end
 
 Base.append!(dest::LH5VoV, src::VectorOfVectors) = _append_impl!(dest, src)
 
+# Table columns holding plain vectors of vectors:
+_append_impl!(dest::LH5VoV, src::AbstractVector{<:AbstractVector}) =
+    _append_impl!(dest, VectorOfVectors(src))
+
+# Whether a column can be appended to. Ragged arrays and waveforms keep their
+# element pointers and time axes from when they were opened. Another handle
+# may have appended since, and appending from stale ones corrupts the array:
+_check_appendable(::Any) = nothing
+
+function _check_appendable(A::LH5VoV)
+    ptr = ArraysOfArrays.internal_element_ptr(A)
+    ptr isa Vector || throw(ArgumentError(
+        "Cannot append through a view of a ragged array, its element pointers cannot grow"))
+    clen = _column_object(A)["cumulative_length"]
+    try
+        length(clen) == length(A) && length(fused(A)) == last(ptr) - first(ptr) || throw(ArgumentError(
+            "The array changed on disk since it was opened, reopen it to append"))
+    finally
+        close(clen)
+    end
+end
+
+function _check_appendable(wf::LH5VectorOfRDWaveforms)
+    _check_appendable(wf.signal)
+    t0 = _column_object(wf)["t0"]
+    try
+        n = length(wf.time)
+        length(wf.signal) == n && length(t0) == n || throw(ArgumentError(
+            "The array changed on disk since it was opened, reopen it to append"))
+    finally
+        close(t0)
+    end
+end
+
 _append_impl!(dest::LH5VoV, src::VectorOfVectors) = begin
     isempty(src) && return dest
+    _check_appendable(dest)
+    dest_ptr = ArraysOfArrays.internal_element_ptr(dest)
     dset = parent(fused(dest).file)["cumulative_length"]
     try
-        dest_ptr = ArraysOfArrays.internal_element_ptr(dest)
+        clen = LH5Array(dset)
         old_len = last(dest_ptr) - first(dest_ptr)
-        # The element pointers date from when dest was opened. Another handle
-        # may have appended since, and appending from stale pointers corrupts
-        # the array:
-        length(dset) == length(dest) && length(fused(dest)) == old_len || throw(ArgumentError(
-            "The array changed on disk since it was opened, reopen it to append"))
         src_ptr = ArraysOfArrays.internal_element_ptr(src)
         src_flat = fused(src)[first(src_ptr):(last(src_ptr) - 1)]
-        # Derived from src before dest changes, since src may be dest itself:
-        new_clen = cumsum(diff(src_ptr)) .+ old_len
+        # Derived from src before dest changes, since src may be dest itself,
+        # and converted first, so that an overflow leaves the data as it was:
+        new_clen = convert(Vector{eltype(clen)}, cumsum(diff(src_ptr)) .+ old_len)
         append!(fused(dest), src_flat)
         _append_elemptr!(dest_ptr, src_ptr)
         append!(dest.kernel_size, src.kernel_size)
-        append!(LH5Array(dset), new_clen)
+        append!(clen, new_clen)
     finally
         close(dset)
     end
@@ -800,31 +843,108 @@ _getindex_columns(col, idxs) = col[idxs]
 
 Base.getindex(A::LH5Table, idxs::Union{AbstractVector, Colon}) = _getindex_columns(A, idxs)
 
-Base.append!(dest::LH5Table, src) = _append_impl!(dest, src)
-function Base.append!(dest::LH5LazyTable, src)
-    # The table may have gained or lost columns since dest was opened:
-    stored = propertynames(LH5Array(_table_store(dest)))
+# The HDF5 object a lazily read column lives in. A nested table is the group
+# of its columns, so the table of a column is the parent of its object:
+_column_object(col::LH5Array) = col.file
+_column_object(col::LH5AoSA) = fused(col).file
+_column_object(col::LH5VoV) = parent(fused(col).file)
+_column_object(wf::LH5VectorOfRDWaveforms) = parent(_column_object(wf.signal))
+_column_object(A::StructArray{<:NamedTuple}) =
+    parent(_column_object(first(StructArrays.components(A))))
+_column_object(tbl::LH5LazyTable) = _table_store(tbl)
+
+_object_token(obj) = HDF5.API.h5o_get_info(obj, HDF5.API.H5O_INFO_BASIC).token
+_same_object(a, b) = _object_token(a) == _object_token(b)
+
+# Columns that can be appended to on disk, nested tables when all of theirs can:
+_disk_column(::Union{LH5Array, LH5VoV, LH5AoSA, LH5VectorOfRDWaveforms, LH5LazyTable}) = true
+_disk_column(A::StructArray{<:NamedTuple}) = all(_disk_column, StructArrays.components(A))
+_disk_column(::Any) = false
+
+# Ragged arrays and waveforms keep their element pointers and time axes in
+# memory. Bringing them up to date keeps tables built from them coherent:
+_refresh!(::Union{LH5Array, LH5AoSA}) = false
+
+function _refresh!(A::LH5VoV)
+    clen_ds = _column_object(A)["cumulative_length"]
+    clen = try LH5Array(clen_ds)[:] finally close(clen_ds) end
+    new_ptr = _element_ptrs(clen)
+    ptr = ArraysOfArrays.internal_element_ptr(A)
+    resize!(ptr, length(new_ptr))
+    copyto!(ptr, new_ptr)
+    resize!(A.kernel_size, length(clen))
+    false
+end
+
+function _refresh!(wf::LH5VectorOfRDWaveforms)
+    _refresh!(wf.signal)
+    fresh = LH5Array(_column_object(wf), AbstractVector{<:RDWaveform})
+    resize!(wf.time, length(fresh.time))
+    copyto!(wf.time, fresh.time)
+    false
+end
+
+function _check_table_columns(stored, dest)
     issetequal(stored, propertynames(dest)) || throw(ArgumentError(
         "The columns of the table changed on disk since it was opened, reopen it to append"))
-    _append_impl!(_reopened_table(dest), src)
+end
+
+# The table may have gained or lost columns since dest was opened, and the
+# columns dest cached may have been appended to or replaced:
+function Base.append!(dest::LH5LazyTable, src)
+    _check_table_columns(propertynames(LH5Array(_table_store(dest))), dest)
+    _refresh_cache!(dest)
+    _append_impl!(_typed_table(dest), src)
     dest
 end
 
-# StructArrays appends column-wise only when the element types of both
-# tables match exactly, which disk-backed and in-memory tables rarely do:
-function _append_impl!(dest::LH5Table, src)
+Base.append!(dest::LH5Table, src) = _append_impl!(dest, src)
+
+# Columns must be disk-backed and still be the objects stored under their
+# names, and nested tables, like the table itself, must still have the columns
+# they were opened with:
+function _check_append_dest(dest::StructArray{<:NamedTuple})
+    cols = StructArrays.components(dest)
+    for (name, col) in pairs(cols)
+        _disk_column(col) || throw(ArgumentError(
+            "Column \"$name\" was read into memory and cannot be appended to on disk"))
+    end
+    group = _column_object(dest)
+    _check_table_columns(propertynames(LH5Array(group)), dest)
+    for (name, col) in pairs(cols)
+        current = group[String(name)]
+        try
+            _same_object(_column_object(col), current) || throw(ArgumentError(
+                "Column \"$name\" was replaced on disk since it was opened, reopen the table to append"))
+        finally
+            close(current)
+        end
+        _check_appendable(col)
+    end
+    foreach(col -> col isa StructArray{<:NamedTuple} && _check_append_dest(col), cols)
+end
+
+# Column by column. Source columns are read before anything is written, since
+# they may alias destination columns, and StructArrays would append row by row
+# unless both element types match exactly:
+function _append_impl!(dest::StructArray{<:NamedTuple}, src)
+    _check_append_dest(dest)
     dcols = StructArrays.components(dest)
-    scols = Tables.columntable(src)
+    scols = map(_materialize, Tables.columntable(src))
     issetequal(keys(dcols), keys(scols)) || throw(ArgumentError(
         "Cannot append table with columns $(keys(scols)) to table with columns $(keys(dcols))"))
+    allequal(map(length, Tuple(scols))) || throw(ArgumentError(
+        "The columns of the table to append differ in length"))
     for k in keys(dcols)
-        append!(dcols[k], scols[k])
+        _append_impl!(dcols[k], scols[k])
     end
     dest
 end
 
-_append_impl!(dest::LH5Table, src::EncodedArray) =
+_append_impl!(dest::StructArray{<:NamedTuple}, src::EncodedArray) =
     throw(ArgumentError("Cannot append an encoded array to a table"))
+
+_append_impl!(dest::LH5AoSA, src::AbstractVector{<:AbstractArray}) = append!(dest, src)
 
 # These add no behavior, they only resolve ambiguities with the append!
 # methods of EncodedArrays and StructArrays:
@@ -835,22 +955,22 @@ Base.append!(dest::StructArrays.StructVector{T, <:LH5TableColumns},
 
 Base.append!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) =
     _append_impl!(dest, src)
-
-# The waveform group holds t0, dt and the signal values:
-_waveform_group(wf::LH5VectorOfRDWaveforms) = _waveform_group(wf.signal)
-_waveform_group(signal::LH5AoSA) = parent(fused(signal).file)
-_waveform_group(signal::LH5VoV) = parent(parent(fused(signal).file))
+# StructArrays appends arrays of one element type component by component,
+# which would leave the stored time axes behind:
+Base.append!(dest::W, src::W) where {W<:LH5VectorOfRDWaveforms} = _append_impl!(dest, src)
 
 _append_impl!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
-    # Taken before anything changes, since src may be dest itself:
-    src_t0 = first.(src.time)
-    src_dt = step.(src.time)
-    StructArrays.foreachfield(append!, dest, src)
-
-    grp = _waveform_group(dest)
+    length(src.time) == length(src.signal) || throw(ArgumentError(
+        "The waveforms to append have more time axes than signals or vice versa"))
+    _check_appendable(dest)
+    grp = _column_object(dest)
     dset_t0 = grp["t0"]
     dset_dt = grp["dt"]
     try
+        # Taken before anything changes, since src may be dest itself:
+        src_t0 = first.(src.time)
+        src_dt = step.(src.time)
+        StructArrays.foreachfield(append!, dest, src)
         append!(LH5Array(dset_t0), src_t0)
         append!(LH5Array(dset_dt), src_dt)
     finally
@@ -1134,6 +1254,10 @@ function create_entry(parent::LHDataStore, name::AbstractString,
             create_entry(parent, "$name/$(String(k))", data[k]; kwargs...)
         end
         setdatatype!(grp, typeof(data))
+    catch
+        # A half-written group would block writing the entry again:
+        HDF5.delete_object(parent.data_store, name)
+        rethrow()
     finally
         close(grp)
     end
@@ -1236,6 +1360,10 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
+# A table is a vector of rows, so its columns must be vectors:
+_check_vector_columns(cols) = all(col -> col isa AbstractVector, cols) ||
+    throw(ArgumentError("The columns of a table must be vectors"))
+
 # write tables (anything that satisfies the Tables.jl column interface)
 function create_entry(parent::LHDataStore, name::AbstractString, data;
     kwargs...)
@@ -1243,8 +1371,7 @@ function create_entry(parent::LHDataStore, name::AbstractString, data;
     Tables.istable(data) || throw(ArgumentError("Value to write, of type "
     *"$(typeof(data)), is not a table"))
     cols = Tables.columntable(data)
-    all(col -> col isa AbstractVector, cols) || throw(ArgumentError(
-        "The columns of a table to write must be vectors"))
+    _check_vector_columns(cols)
     create_entry(parent, name, cols; kwargs...)
     setdatatype!(parent.data_store[name], StructArray{NamedTuple{keys(cols)}})
     nothing
@@ -1288,51 +1415,53 @@ function lh5open(f::Function, filename::AbstractString,
 end
 
 """
-    add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray,
-        dest::StructArray=LH5Array(lhd.data_store[i]))
+    add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray)
 
-extend the table `dest` at `lhd[i]` with columns from `src`.
+Add the columns of `src` to the table at `lhd[i]`.
 """
-add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray{<:NamedTuple},
-    dest::LH5LazyTable) = add_entries!(lhd, i, src, _typed_table(dest))
-
-function add_entries!(lhd::LHDataStore, i::AbstractString,
-    src::StructArray{<:NamedTuple},
-    dest::StructArray{<:NamedTuple} = _typed_table(LH5Array(lhd.data_store[i])))
-
-    length(dest) == length(src) || throw(DimensionMismatch(
-        "Cannot add columns of length $(length(src)) to table of length $(length(dest))"))
-    # dest may predate earlier additions, so the stored column list is used:
-    stored = propertynames(LH5Array(lhd.data_store[i]))
-    add_entries!(lhd, i, StructArrays.components(src), StructArrays.components(dest))
-    setdatatype!(lhd.data_store[i], StructArray{NamedTuple{(stored..., keys(StructArrays.components(src))...)}})
+function add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray{<:NamedTuple})
+    current = LH5Array(lhd.data_store[i])
+    current isa LH5LazyTable || throw(ArgumentError(
+        "\"$i\" is not a table, add entries to a NamedTuple as a NamedTuple"))
+    _check_vector_columns(StructArrays.components(src))
+    length(current) == length(src) || throw(DimensionMismatch(
+        "Cannot add columns of length $(length(src)) to table of length $(length(current))"))
+    names = _add_entries!(lhd, i, StructArrays.components(src), propertynames(current))
+    setdatatype!(lhd.data_store[i], StructArray{NamedTuple{names}})
     nothing
 end
 
 """
-    add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
-        dest::NamedTuple=LH5Array(lhd.data_store[i]))
+    add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple)
 
-extend the NamedTuple `dest` at `lhd[i]` with elements from `src`.
+Add the entries of `src` to the `NamedTuple` at `lhd[i]`.
 """
-function add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple,
-    dest::NamedTuple=LH5Array(lhd.data_store[i]))
-
-    new_nt = (;dest..., src...)
-    for k in keys(src)
-        lhd["$(i)/$(k)"] = src[k]
-    end
-    setdatatype!(lhd.data_store[i], typeof(new_nt))
+function add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple)
+    current = LH5Array(lhd.data_store[i])
+    current isa NamedTuple || throw(ArgumentError(
+        "\"$i\" is not a NamedTuple, add columns to a table as a StructArray"))
+    names = _add_entries!(lhd, i, src, keys(current))
+    setdatatype!(lhd.data_store[i], NamedTuple{names})
     nothing
 end
 export add_entries!
 
+# Writes the entries and returns the new list of names. The names come from
+# the file, since a handle may predate earlier additions:
+function _add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple, stored)
+    clash = intersect(stored, keys(src))
+    isempty(clash) || throw(ArgumentError("\"$i\" already has entries $clash"))
+    for k in keys(src)
+        lhd["$(i)/$(k)"] = src[k]
+    end
+    (stored..., keys(src)...)
+end
+
 """
     delete_entry!(lhd::LHDataStore, i::AbstractString)
 
-remove the dataset `lhd[i]` and adjust the datatype of the parent if necessary. 
-Currently supported are elements of `NamedTuple`s, tables or
-`HDF5.Group`s.
+Remove the dataset `lhd[i]` and adjust the datatype of the parent if necessary.
+Supported are entries of `NamedTuple`s, tables and `HDF5.Group`s.
 """
 function delete_entry!(lhd::LHDataStore, i::AbstractString)
     parent, child = splitdir(i)
@@ -1344,27 +1473,29 @@ function delete_entry!(lhd::LHDataStore, i::AbstractString)
 end
 export delete_entry!
 
-function _delete_entry(lhd::LHDataStore, nt::NamedTuple, 
+function _remaining_entries(stored, parent::AbstractString, child::AbstractString)
+    Symbol(child) in stored || throw(ArgumentError("\"$parent\" has no entry \"$child\""))
+    remaining = filter(!=(Symbol(child)), stored)
+    isempty(remaining) && throw(ArgumentError("Cannot delete last entry \"$child\" of \"$parent\""))
+    remaining
+end
+
+function _delete_entry(lhd::LHDataStore, nt::NamedTuple,
     parent::AbstractString, child::AbstractString)
 
-    if hasattribute(lhd.data_store[parent], :datatype)
-        newkeys = setdiff(keys(nt), (Symbol(child),))
-        isempty(newkeys) && throw(ArgumentError("Cannot delete last entry \"$child\" of \"$parent\""))
-        new_nt = (;[k => nt[k] for k in newkeys]...)
-        setdatatype!(lhd.data_store[parent], typeof(new_nt))
-    end
+    remaining = _remaining_entries(keys(nt), parent, child)
     HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
+    if hasattribute(lhd.data_store[parent], :datatype)
+        setdatatype!(lhd.data_store[parent], NamedTuple{remaining})
+    end
     nothing
 end
 
-_delete_entry(lhd::LHDataStore, tbl::LH5LazyTable, parent::AbstractString,
-    child::AbstractString) = _delete_entry(lhd, _typed_table(tbl), parent, child)
-
-function _delete_entry(lhd::LHDataStore, tbl::StructArray{<:NamedTuple},
+function _delete_entry(lhd::LHDataStore, tbl::LH5LazyTable,
     parent::AbstractString, child::AbstractString)
 
-    _delete_entry(lhd, StructArrays.components(tbl), parent, child)
-    newkeys = filter(!=(Symbol(child)), propertynames(tbl))
-    setdatatype!(lhd.data_store[parent], StructArray{NamedTuple{newkeys}})
+    remaining = _remaining_entries(propertynames(tbl), parent, child)
+    HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
+    setdatatype!(lhd.data_store[parent], StructArray{NamedTuple{remaining}})
     nothing
 end
