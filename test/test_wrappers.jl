@@ -179,6 +179,11 @@ using Unitful
                     @test getdt("m") == "measurement"
                     @test getdt("mv") == "array<1>{measurement}"
                     @test getdt("mv_unit") == "array<1>{measurement}"
+                    # measurements are read eagerly, so an element stays correlated with itself:
+                    x = lhd["mv"]
+                    @test x isa Array
+                    @test iszero(Measurements.uncertainty(x[1] - x[1]))
+                    @test iszero(Measurements.uncertainty(sum(x .- x)))
                 end
             end
         end
