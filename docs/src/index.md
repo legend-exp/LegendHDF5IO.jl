@@ -29,16 +29,17 @@ end
 ```
 
 Datasets are wrapped as lazy [`LH5Array`](@ref)s, so slicing reads only the
-requested part of the data from disk. Arrays of `Enum`s, `StaticVector`s and
-`NTuple`s are the exception and are read eagerly. `LH5Array` implements the
+requested part of the data from disk. Arrays of `Enum`s, `StaticVector`s,
+`NTuple`s and `Measurement`s are the exception and are read eagerly.
+`LH5Array` implements the
 [DiskArrays.jl](https://github.com/JuliaIO/DiskArrays.jl) interface: views,
-iteration and reductions like `sum` read the data block by block, and
-broadcasts over `LH5Array`s are lazy, evaluated chunk by chunk when collected
-or written, so selecting columns with
-[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) opens
-the columns without reading their values. `map` is eager, as in Base. Views of
-empty ranges and empty elements of lazily read vectors of vectors are not
-supported by DiskArrays yet; read such data with `[:]` first.
+iteration and reductions like `sum` read the data chunk by chunk, and
+broadcasts over `LH5Array`s are lazy and evaluated the same way when collected
+or written. Arithmetic, `vcat`, `reverse` and `diff` return such lazy arrays
+as well, which read from the file on access and stop working once it is
+closed. `map` is eager, as in Base. Broadcasts that expand an `LH5Array` along
+a singleton dimension or add dimensions are not supported by DiskArrays yet;
+read such data with `[:]` first.
 
 Datasets opened for writing can be modified in place within their current
 size (`E[1:10] = ...`); `append!` grows them. Nested structures (`NamedTuple`s,
@@ -77,9 +78,15 @@ end
 Reading `lhd["evt"]` returns an `LH5LazyTable`; `lhd["evt"][:]`, or indexing
 with a range, reads the rows into a `StructArray`. A table handle keeps the
 column names it was opened with: columns added through other handles are not
-visible to it, reading a column deleted elsewhere fails, and `append!` refuses
-when the set of column names has changed. Lazy tables cannot be concatenated
-with `vcat`; read them first.
+visible to it, and `append!` refuses when the set of column names has changed.
+Columns it has opened keep reading the data they were opened on, even after
+they were deleted elsewhere; `append!` reopens such columns and refreshes the
+others. Append through the handle: appending to a `StructArray` conversion
+of a table is only supported while none of its columns were read into memory.
+Column-wise broadcasts, such as
+[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) over
+`StructArray(tbl)`, read only the columns they use. Lazy tables cannot be
+concatenated with `vcat`; read them first.
 
 Scattered reads either read the whole index span the events cover, or the
 events themselves. The thresholds for that choice,
@@ -94,7 +101,7 @@ Open the file with `usechunks = true` to create extensible array datasets, then
 grow them with `append!` (always along the last dimension):
 
 ```julia
-lh5open("events.lh5", "cw", usechunks = true) do lhd
+lh5open("events_chunked.lh5", "cw", usechunks = true) do lhd
     lhd["evt"] = tbl
     append!(lhd["evt"], tbl)
 end
@@ -134,15 +141,18 @@ hits = open(read, "simulation.hdf5", Geant4HDF5Input)
 
 ## Supporting custom types
 
-Additional types can be supported by registering an LH5 datatype name and
-defining a reader and a writer:
+To support another type, register an LH5 datatype name for it and define a
+reader and a writer. Register from the `__init__` function of your module or
+package extension, since the registry is not part of the precompilation cache:
 
 ```julia
 struct ChannelNo
     no::Int
 end
 
-LegendHDF5IO.register_datatype!("channelno", ChannelNo)
+function __init__()
+    LegendHDF5IO.register_datatype!("channelno", ChannelNo)
+end
 
 LegendHDF5IO.LH5Array(ds::HDF5.Dataset, ::Type{<:ChannelNo}) =
     ChannelNo(read(ds))
@@ -159,8 +169,10 @@ end
 `LegendHDF5IO.register_datatype!(MyEnum)`.
 
 A name can be registered for one type only, and a type under one name only.
-Conflicting registrations, and built-in names like `"real"`, are rejected with
-an `ArgumentError`.
+Names consist of letters and underscores. Conflicting registrations, and
+built-in names like `"real"`, are rejected with an `ArgumentError`. Subtypes
+of a registered type, such as the instances of a parametric type, are written
+under its name.
 
 ## The `readdata`/`writedata` API
 

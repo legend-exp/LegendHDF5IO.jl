@@ -79,19 +79,36 @@ function _typed_table(tbl::LH5LazyTable)
 end
 
 """
-    _reopened_table(tbl::LH5LazyTable)
+    _refresh_cache!(tbl::LH5LazyTable)
 
-Drop the cached columns, reopen them and return them as a `StructArray`.
-Table appends go through this, since columns cached by `tbl` may have been
-appended to or replaced through other handles in the meantime.
+Bring the cached columns up to date with the file. Columns whose dataset was
+replaced are reopened, ragged arrays take their current element pointers and
+waveforms their current time axes, in place. Appends through `tbl` call this
+first, since other handles may have changed the table in the meantime.
+Returns whether a column was reopened, which makes tables built from the old
+columns stale.
 """
-function _reopened_table(tbl::LH5LazyTable)
+function _refresh_cache!(tbl::LH5LazyTable)
     lock(_table_lock(tbl)) do
-        empty!(_table_columns(tbl))
-        setfield!(tbl, :typed, nothing)
-        _typed_table(tbl)
+        cols = _table_columns(tbl)
+        store = _table_store(tbl)
+        reopened = false
+        for (name, col) in cols
+            current = store[String(name)]
+            if _disk_column(col) && _same_object(_column_object(col), current)
+                close(current)
+                reopened |= _refresh!(col)
+            else
+                cols[name] = LH5Array(current)
+                reopened = true
+            end
+        end
+        reopened && setfield!(tbl, :typed, nothing)
+        reopened
     end
 end
+
+_refresh!(tbl::LH5LazyTable) = _refresh_cache!(tbl)
 
 _typed_table(tbl::StructArray{<:NamedTuple}) = tbl
 
