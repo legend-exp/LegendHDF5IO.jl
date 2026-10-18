@@ -632,6 +632,27 @@ using Unitful
                     @test_throws ArgumentError append!(typed, StructArray((a = [4.0], v = VectorOfVectors([[6]]))))
                     @test lhd["tbl_coh"][:].c == [7, 8, 9]
                 end
+                @testset "rejected appends leave datasets unchanged" begin
+                    lhd["m"] = rand(4, 3)
+                    @test_throws DimensionMismatch append!(lhd["m"], ones(2, 2))
+                    @test size(lhd["m"]) == (4, 3)
+                    lhd["vv"] = VectorOfVectors([[10.0, 20.0], [30.0]])
+                    # views cannot grow their element pointers:
+                    @test_throws ArgumentError append!(view(lhd["vv"], 1:2), VectorOfVectors([[1.0, 2.0]]))
+                    @test lhd["vv"][:] == [[10.0, 20.0], [30.0]]
+                    # table columns holding plain vectors of vectors are accepted:
+                    lhd["tbl_vv"] = StructArray((v = VectorOfVectors([[10.0, 20.0], [30.0]]),))
+                    append!(lhd["tbl_vv"], StructArray((v = [[1.0], [2.0, 3.0]],)))
+                    @test lhd["tbl_vv"][:].v == [[10.0, 20.0], [30.0], [1.0], [2.0, 3.0]]
+                    # cumulative lengths that overflow their element type are rejected up front:
+                    lhd["vv_narrow"] = VectorOfVectors([[1, 2], [3]])
+                    grp = lhd.data_store["vv_narrow"]
+                    HDF5.delete_object(grp, "cumulative_length")
+                    grp["cumulative_length"] = UInt8[2, 3]
+                    LegendHDF5IO.setdatatype!(grp["cumulative_length"], Vector{UInt8})
+                    @test_throws InexactError append!(lhd["vv_narrow"], VectorOfVectors([collect(1:300)]))
+                    @test lhd["vv_narrow"][:] == [[1, 2], [3]]
+                end
                 @testset "adding columns after appends" begin
                     lhd["tbl_grow"] = StructArray((v = VectorOfVectors([[1], [2, 3]]),))
                     append!(lhd["tbl_grow"], StructArray((v = VectorOfVectors([[4]]),)))

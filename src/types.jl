@@ -727,15 +727,26 @@ Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} =
 _append_impl!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
     x = convert(Array{T, N}, src)
     old_size = size(dest)
-    new_size = (old_size[1:N-1]..., old_size[N] + size(src, N))
-    from, to = old_size[N] + 1, new_size[N]
-    indices = (ntuple(_ -> Colon(), Val(N - 1))..., from:to)
+    Base.front(size(x)) == Base.front(old_size) || throw(DimensionMismatch(
+        "Cannot append an array of size $(size(x)) to an array of size $old_size along the last dimension"))
+    new_size = (Base.front(old_size)..., old_size[N] + size(x, N))
+    indices = (ntuple(_ -> Colon(), Val(N - 1))..., (old_size[N] + 1):new_size[N])
     HDF5.set_extent_dims(dest.file, new_size)
-    dest.file[indices...] = _ustrip(x)
+    try
+        dest.file[indices...] = _ustrip(x)
+    catch
+        # The extension would otherwise stay behind, filled with fill values:
+        HDF5.set_extent_dims(dest.file, old_size)
+        rethrow()
+    end
     dest
 end
 
 Base.append!(dest::LH5VoV, src::VectorOfVectors) = _append_impl!(dest, src)
+
+# Table columns holding plain vectors of vectors:
+_append_impl!(dest::LH5VoV, src::AbstractVector{<:AbstractVector}) =
+    _append_impl!(dest, VectorOfVectors(src))
 
 # Whether a column can be appended to. Ragged arrays and waveforms keep their
 # element pointers and time axes from when they were opened. Another handle
@@ -770,18 +781,20 @@ end
 _append_impl!(dest::LH5VoV, src::VectorOfVectors) = begin
     isempty(src) && return dest
     _check_appendable(dest)
+    dest_ptr = ArraysOfArrays.internal_element_ptr(dest)
     dset = parent(fused(dest).file)["cumulative_length"]
     try
-        dest_ptr = ArraysOfArrays.internal_element_ptr(dest)
+        clen = LH5Array(dset)
         old_len = last(dest_ptr) - first(dest_ptr)
         src_ptr = ArraysOfArrays.internal_element_ptr(src)
         src_flat = fused(src)[first(src_ptr):(last(src_ptr) - 1)]
-        # Derived from src before dest changes, since src may be dest itself:
-        new_clen = cumsum(diff(src_ptr)) .+ old_len
+        # Derived from src before dest changes, since src may be dest itself,
+        # and converted first, so that an overflow leaves the data as it was:
+        new_clen = convert(Vector{eltype(clen)}, cumsum(diff(src_ptr)) .+ old_len)
         append!(fused(dest), src_flat)
         _append_elemptr!(dest_ptr, src_ptr)
         append!(dest.kernel_size, src.kernel_size)
-        append!(LH5Array(dset), new_clen)
+        append!(clen, new_clen)
     finally
         close(dset)
     end
