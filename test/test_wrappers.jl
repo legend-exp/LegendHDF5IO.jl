@@ -314,6 +314,8 @@ using Unitful
                 lhd["empty"] = Float32[]
                 lhd["empty2d"] = zeros(Int, 3, 0)
                 lhd["small"] = Float32[1, 2, 3]
+                lhd["small2d"] = collect(reshape(1:9, 3, 3))
+                lhd["vov_e"] = VectorOfVectors([Float32[1, 2], Float32[], Float32[3]])
                 lhd["bvsv"] = VectorOfSimilarVectors([true false true; false true false])
                 # other writers may store bytes other than 0 and 1:
                 lhd.data_store["bvsv"][1, 2] = 0x02
@@ -326,7 +328,8 @@ using Unitful
             lh5open(joinpath(dir, "diskarrays.lh5")) do lhd
                 X = lhd["x"]
                 @test X isa DiskArrays.AbstractDiskArray
-                @test DiskArrays.haschunks(X) isa DiskArrays.Unchunked
+                # contiguous datasets report an estimated chunk grid as well:
+                @test DiskArrays.haschunks(X) isa DiskArrays.Chunked
                 @test sum(X) ≈ sum(x) * u"keV"
                 @test maximum(X) == maximum(x) * u"keV"
                 @test collect(X) == x * u"keV"
@@ -366,6 +369,8 @@ using Unitful
                 @test size(M[Int[], [1, 3000]]) == (0, 2)
                 @test size(M[:, Int[]]) == (100, 0)
                 @test X[Int[]] == Float32[] * u"keV"
+                @test collect(view(X, 1:-1:2)) == Float32[] * u"keV"
+                @test collect(view(M, 2:-1:3, :)) == zeros(UInt16, 0, 3000)
                 # reversed ranges and out-of-bounds indices behave as in Base:
                 @test M[:, 10:-1:1] == data[:, 10:-1:1]
                 @test X[10:-2:1] == x[10:-2:1] * u"keV"
@@ -408,13 +413,21 @@ using Unitful
                 @test collect(view(S, 2:3)) == ["x2", "x3"]
                 @test collect(S .* "!") == ["x$(i)!" for i in 1:50]
 
-                # empty datasets have a valid chunk grid (DiskArrays itself
-                # cannot view, broadcast or reduce empty arrays yet):
+                # empty datasets, views and ragged elements have a valid chunk grid:
                 E = lhd["empty"]
                 @test isempty(DiskArrays.eachchunk(E))
                 @test collect(E) == Float32[]
                 @test isempty(DiskArrays.eachchunk(lhd["empty2d"]))
                 @test collect(lhd["empty2d"]) == zeros(Int, 3, 0)
+                @test collect(view(X, 1:0)) == Float32[] * u"keV"
+                # views through masks and CartesianIndex vectors have a chunk grid as well:
+                S2 = lhd["small2d"]
+                @test collect(view(S2, trues(3, 3))) == 1:9
+                @test sum(view(S2, [CartesianIndex(1, 1), CartesianIndex(3, 3)])) == 10
+                @test collect(view(X, 1:0) .+ 1u"keV") == Float32[] * u"keV"
+                V = lhd["vov_e"]
+                @test collect(V[2]) == Float32[]
+                @test V[2] == Float32[] && V[[1, 2]] == [Float32[1, 2], Float32[]]
             end
             lh5open(joinpath(dir, "diskarrays_chunked.lh5")) do lhd
                 W = lhd["wf"].data

@@ -688,8 +688,21 @@ end
 Base.setindex!(lh::LH5Array{T, 1}, v::EncodedArray, ::Colon) where {T} =
     invoke(setindex!, Tuple{DiskArrays.AbstractDiskArray, AbstractArray, Vararg{Any}}, lh, v, Colon())
 
-DiskArrays.haschunks(lh::LH5Array) =
-    isnothing(_chunk_dims(lh.file)) ? DiskArrays.Unchunked() : DiskArrays.Chunked()
+# Contiguous datasets report a chunk grid as well, estimated below, so that
+# DiskArrays never estimates one itself, which fails for empty views:
+DiskArrays.haschunks(::LH5Array) = DiskArrays.Chunked()
+
+# DiskArrays maps the parent's grid onto a view only through plain indices.
+# Views through masks or CartesianIndex vectors get an estimated grid:
+function DiskArrays.eachchunk(a::LH5SubDiskArray)
+    # DiskArrays cannot map the grid onto an empty view, of a reversed range for example:
+    isempty(a) && return DiskArrays.GridChunks(a, max.(size(a), 1))
+    plain(i) = i isa Union{Int, AbstractRange, Colon} ||
+        (i isa AbstractVector{<:Integer} && !(i isa Base.LogicalIndex))
+    all(plain, parentindices(a)) &&
+        return invoke(DiskArrays.eachchunk, Tuple{DiskArrays.AbstractSubDiskArray}, a)
+    DiskArrays.estimate_chunksize(a)
+end
 
 # The return type is asserted since HDF5 property lists are not inferable,
 # and DiskArrays iterates through the chunk grid:
