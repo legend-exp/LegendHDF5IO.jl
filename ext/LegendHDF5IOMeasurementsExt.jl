@@ -16,14 +16,17 @@ const MeasurementLike = Union{Measurement, Quantity{<:Measurement}}
 LegendHDF5IO.datatype_to_string(::Type{<:MeasurementLike}) = "measurement"
 
 """
-    LH5Array(ds::HDF5.Dataset, ::Type{<:Measurement})
+    LH5Array(ds::HDF5.H5DataStore, ::Type{<:Measurement})
+    LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractArray{<:Measurement}})
 
-return a value with type `Measurement`
+return a `Measurement` or an in-memory array of them. Measurements are read
+eagerly: a lazy broadcast would build an independent measurement on every
+access, so an element would not be correlated with itself.
 """
 function LegendHDF5IO.LH5Array(ds::HDF5.H5DataStore,
     ::Type{<:Union{MeasurementLike, AbstractArray{<:MeasurementLike}}}
 )
-    nt::NamedTuple{(:val, :err)} = LegendHDF5IO.LH5Array(ds, NamedTuple{(:val, :err)})
+    nt::NamedTuple{(:val, :err)} = LegendHDF5IO._materialize(LegendHDF5IO.LH5Array(ds, NamedTuple{(:val, :err)}))
     measurement.(nt.val, nt.err)
 end
 
