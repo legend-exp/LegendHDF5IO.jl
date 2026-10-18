@@ -316,7 +316,8 @@ function LegendDataTypes.setunits!(dset::HDF5.Dataset, units::Unitful.Unitlike)
 end
 
 
-default_datatype(dset::HDF5.Dataset) = AbstractArray{<:RealQuantity,length(size(dset))}
+default_datatype(dset::HDF5.Dataset) =
+    ndims(dset) == 0 ? RealQuantity : AbstractArray{<:RealQuantity, ndims(dset)}
 default_datatype(df::HDF5.H5DataStore) = NamedTuple{(Symbol.(keys(df))...,)}
 
 function getdatatype(input::Union{HDF5.Dataset, HDF5.H5DataStore})
