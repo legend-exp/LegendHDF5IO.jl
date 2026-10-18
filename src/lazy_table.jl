@@ -70,7 +70,7 @@ function _typed_table(tbl::LH5LazyTable)
         cached = getfield(tbl, :typed)
         isnothing(cached) || return cached
         names = propertynames(tbl)
-        # Nested tables become typed tables as well, StructArrays wants arrays as columns:
+        # Nested tables become typed tables as well, since StructArrays wants arrays as columns:
         cols = map(name -> _typed_column(getproperty(tbl, name)), names)
         typed = StructArray(NamedTuple{names}(cols))
         setfield!(tbl, :typed, typed)

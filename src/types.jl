@@ -483,7 +483,7 @@ function _getindex_scattered_single_read(
 end
 
 # Unique values of a sorted vector and, if there were duplicates, the
-# positions of the inputs therein:
+# position of each input among them:
 function _dedup_sorted(idxs::AbstractVector{<:Integer})
     u = Int[Int(first(idxs))]
     imap = Vector{Int}(undef, length(idxs))
@@ -568,8 +568,9 @@ _getindex_impl(lh::LH5Array{T, N},
         checkbounds(lh, front..., ilast)
         lh[front..., findall(_materialize(ilast))]
     elseif ilast isa Base.LogicalIndex
-        # to_indices turns logical masks into iterate-only LogicalIndex;
-        # materialize the mask, iterating it would read lazy masks per element:
+        # to_indices turns logical masks into an iterate-only LogicalIndex.
+        # The mask is materialized first, since iterating a lazy mask would
+        # read it element by element:
         checkbounds(lh, front..., ilast.mask)
         lh[front..., findall(_materialize(ilast.mask))]
     elseif ilast isa AbstractVector{<:Integer} && !(ilast isa AbstractRange) &&
@@ -801,7 +802,7 @@ end
 _append_impl!(dest::LH5Table, src::EncodedArray) =
     throw(ArgumentError("Cannot append an encoded array to a table"))
 
-# These add no behaviour, they only resolve ambiguities with the append!
+# These add no behavior, they only resolve ambiguities with the append!
 # methods of EncodedArrays and StructArrays:
 Base.append!(dest::LH5Array{T, 1}, src::EncodedArray) where {T} = _append_impl!(dest, src)
 Base.append!(dest::LH5Table, src::EncodedArray) = _append_impl!(dest, src)
@@ -979,7 +980,7 @@ function create_entry(parent::LHDataStore, name::AbstractString, data::T;
     nothing
 end
 
-# Store Bool values as UInt8 for h5py compatibility, like writedata does
+# Store Bool values as UInt8 for h5py compatibility
 function create_entry(parent::LHDataStore, name::AbstractString, data::Bool;
     kwargs...)
 

@@ -36,12 +36,13 @@ iteration and reductions like `sum` read the data block by block, and
 broadcasts over `LH5Array`s are lazy, evaluated chunk by chunk when collected
 or written, so selecting columns with
 [PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) opens
-the columns without reading their values. `map` is eager, as in Base. Datasets
-opened for writing can be modified in place within their current size
-(`E[1:10] = ...`); `append!` grows them. Nested structures (`NamedTuple`s,
-tables, waveforms) are represented as HDF5 groups. Views of empty ranges and
-empty elements of lazily read vectors of vectors are not supported by
-DiskArrays yet; read such data with `[:]` first.
+the columns without reading their values. `map` is eager, as in Base. Views of
+empty ranges and empty elements of lazily read vectors of vectors are not
+supported by DiskArrays yet; read such data with `[:]` first.
+
+Datasets opened for writing can be modified in place within their current
+size (`E[1:10] = ...`); `append!` grows them. Nested structures (`NamedTuple`s,
+tables, waveforms) are represented as HDF5 groups.
 
 ### Tables and waveforms
 
