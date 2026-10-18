@@ -1230,6 +1230,10 @@ function create_entry(parent::LHDataStore, name::AbstractString,
             create_entry(parent, "$name/$(String(k))", data[k]; kwargs...)
         end
         setdatatype!(grp, typeof(data))
+    catch
+        # A half-written group would block writing the entry again:
+        HDF5.delete_object(parent.data_store, name)
+        rethrow()
     finally
         close(grp)
     end

@@ -146,6 +146,14 @@ using Unitful
                     @test identity.(w[1:2]) == waveform[1:2]
                     @test collect(w[[1, 3]]) == waveform[[1, 3]]
                 end
+                @testset "failed group writes leave nothing behind" begin
+                    @test_throws ArgumentError lhd["bad"] = (a = [1, 2], b = Dict(1 => 2))
+                    @test !haskey(lhd.data_store, "bad")
+                    @test_throws ArgumentError lhd["bad"] = StructArray((a = [1, 2], b = [Dict(1 => 2), Dict(3 => 4)]))
+                    @test !haskey(lhd.data_store, "bad")
+                    lhd["bad"] = (a = [1, 2],)
+                    @test lhd["bad"].a[:] == [1, 2]
+                end
                 @testset "IO of tables" begin
                     tbl = StructArray((a = rand(10), b = rand(10)))
                     @test setindex!(lhd, tbl, "tbl") |> isnothing
