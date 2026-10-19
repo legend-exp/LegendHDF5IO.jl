@@ -91,9 +91,11 @@ concatenated with `vcat`; read them first.
 Scattered reads either read the whole index span the events cover, or the
 events themselves. The thresholds for that choice,
 [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) and
-[`LegendHDF5IO.scatter_bulk_max_waste`](@ref), are tuned for local storage by
-default; raise them on filesystems with a high per-operation latency, such as
-cluster filesystems.
+[`LegendHDF5IO.scatter_bulk_max_waste`](@ref), depend on the file system by
+default: 1 MiB and a factor of 4 on local storage, 8 MiB and 16 on network
+file systems such as GPFS, NFS or Lustre, which pay per read operation. The
+file system is recognized from the mount table on Linux. Set the thresholds
+to override the defaults.
 
 ### Appending and compression
 
