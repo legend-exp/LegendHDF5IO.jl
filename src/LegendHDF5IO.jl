@@ -43,8 +43,8 @@ function _register_builtin_datatypes!()
 end
 
 function __init__()
-    scatter_bulk_max_bytes[] = @load_preference("scatter_bulk_max_bytes", 2^20)
-    scatter_bulk_max_waste[] = @load_preference("scatter_bulk_max_waste", 4)
+    scatter_bulk_max_bytes[] = @load_preference("scatter_bulk_max_bytes", nothing)
+    scatter_bulk_max_waste[] = @load_preference("scatter_bulk_max_waste", nothing)
     _register_builtin_datatypes!()
 end
 

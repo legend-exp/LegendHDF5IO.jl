@@ -390,33 +390,88 @@ end
     LegendHDF5IO.scatter_bulk_max_bytes[]
 
 Size up to which a scattered read reads the whole index span its events
-cover, instead of reading the events themselves (1 MiB by default).
+cover, instead of reading the events themselves.
 
 Reading the span costs one read operation. Reading the events costs one
 scattered selection, or one read per run of adjacent events, depending on
-element type, rank and layout. The default suits local storage; on
-filesystems with a high per-operation latency, such as cluster filesystems,
-fewer and larger reads pay off, so raise it there. Variable-length elements
-like strings are always read selectively. Can also be set per environment
-as the preference "scatter_bulk_max_bytes".
+element type, rank and layout. With the default `nothing` the limit depends
+on the file system the file lives on: 1 MiB on local storage and 8 MiB on
+network file systems such as GPFS, NFS or Lustre, where fewer and larger
+reads pay off. Variable-length elements like strings are always read
+selectively. Can also be set per environment as the preference
+"scatter_bulk_max_bytes".
 
 See also [`LegendHDF5IO.scatter_bulk_max_waste`](@ref).
 """
-const scatter_bulk_max_bytes = Ref(2^20)
+const scatter_bulk_max_bytes = Ref{Union{Nothing, Int}}(nothing)
 
 """
     LegendHDF5IO.scatter_bulk_max_waste[]
 
 Factor by which a scattered read may exceed the requested amount of data
-when it reads the whole index span its events cover (4 by default).
+when it reads the whole index span its events cover.
 
 Densely covered spans are read as a whole however large they are, so
-raising this trades reading more data for fewer read operations. Spans up
-to [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) are read as a whole
-regardless. Can also be set per environment as the preference
+raising this trades reading more data for fewer read operations. With the
+default `nothing` the factor is 4 on local storage and 16 on network file
+systems. Spans up to [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) are read
+as a whole regardless. Can also be set per environment as the preference
 "scatter_bulk_max_waste".
 """
-const scatter_bulk_max_waste = Ref(4.0)
+const scatter_bulk_max_waste = Ref{Union{Nothing, Float64}}(nothing)
+
+# Network file systems pay per operation rather than per byte:
+const _scatter_defaults = (
+    disk = (bytes = 2^20, waste = 4.0),
+    network = (bytes = 2^23, waste = 16.0),
+)
+
+function _scatter_limits(network::Bool)
+    defaults = network ? _scatter_defaults.network : _scatter_defaults.disk
+    (something(scatter_bulk_max_bytes[], defaults.bytes),
+        something(scatter_bulk_max_waste[], defaults.waste))
+end
+
+_scatter_limits(lh::LH5Array) = _scatter_limits(_is_network_file(HDF5.filename(lh.file)))
+
+const _network_fstypes = Set(["nfs", "nfs4", "gpfs", "lustre", "cifs", "smb3", "ceph",
+    "beegfs", "glusterfs", "panfs", "afs", "9p", "fuse.sshfs"])
+
+# Looked up once per file:
+const _network_files = Dict{String, Bool}()
+const _network_files_lock = ReentrantLock()
+
+_is_network_file(path::AbstractString) = lock(_network_files_lock) do
+    get!(_network_files, path) do
+        _fstype(path) in _network_fstypes
+    end
+end
+
+# The type of the file system a path lives on, from the mount table of the
+# process on Linux. Elsewhere, and for files that are not on disk, such as
+# in-memory ones, nothing is known:
+function _fstype(path::AbstractString)
+    Sys.islinux() && isfile("/proc/self/mounts") && ispath(path) || return nothing
+    _fstype(realpath(path), readlines("/proc/self/mounts"))
+end
+
+# Mount points escape spaces and other characters as octal sequences:
+_unescape_mount(s::AbstractString) =
+    replace(s, r"\\([0-7]{3})" => m -> string(Char(parse(Int, m[2:end]; base = 8))))
+
+function _fstype(path::AbstractString, mounts::AbstractVector{<:AbstractString})
+    best, bestlen = nothing, -1
+    for line in mounts
+        fields = split(line)
+        length(fields) >= 3 || continue
+        point = _unescape_mount(fields[2])
+        covers = point == "/" || path == point || startswith(path, point * "/")
+        if covers && length(point) > bestlen
+            best, bestlen = String(fields[3]), length(point)
+        end
+    end
+    best
+end
 
 _select_lastdim(A::AbstractArray{<:Any, K}, i) where {K} =
     A[ntuple(_ -> Colon(), Val(K - 1))..., i]
@@ -433,8 +488,8 @@ function _getindex_scattered_lastdim(
     if isbitstype(T) && T <: Number
         row_bytes = sizeof(T) * prod(Base.front(size(lh)))
         span_bytes = (hi - lo + 1) * row_bytes
-        if span_bytes <= scatter_bulk_max_bytes[] ||
-            span_bytes <= scatter_bulk_max_waste[] * length(ilast) * row_bytes
+        max_bytes, max_waste = _scatter_limits(lh)
+        if span_bytes <= max_bytes || span_bytes <= max_waste * length(ilast) * row_bytes
             return _select_lastdim(lh[front..., lo:hi], ilast .- (lo - 1))
         end
     end

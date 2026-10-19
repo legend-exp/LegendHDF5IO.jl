@@ -212,8 +212,22 @@ using Unitful
                 dense_idxs = collect(4:2:1000)
                 @test W[dense_idxs] == VectorOfSimilarVectors(data)[dense_idxs]
 
-                # the bulk/scattered decision is tunable and must not
-                # change the returned values:
+                # the thresholds default by file system and can be overridden:
+                mounts = [
+                    "rootfs / ext4 rw 0 0",
+                    "gpfs01 /data gpfs rw 0 0",
+                    "srv:/exp /data/sub\\040mnt nfs4 rw 0 0",
+                    "tmpfs /tmp tmpfs rw 0 0",
+                ]
+                @test LegendHDF5IO._fstype("/data/x.lh5", mounts) == "gpfs"
+                @test LegendHDF5IO._fstype("/data/sub mnt/x.lh5", mounts) == "nfs4"
+                @test LegendHDF5IO._fstype("/datax/x.lh5", mounts) == "ext4"
+                @test LegendHDF5IO._fstype("/home/u/x.lh5", mounts) == "ext4"
+                @test LegendHDF5IO._fstype("/x.lh5", String[]) === nothing
+                @test LegendHDF5IO._scatter_limits(false) == (2^20, 4.0)
+                @test LegendHDF5IO._scatter_limits(true) == (2^23, 16.0)
+                @test LegendHDF5IO._scatter_limits(A) == LegendHDF5IO._scatter_limits(LegendHDF5IO._is_network_file(path))
+                # tuning the thresholds must not change the returned values:
                 tune = [5, 5, 900, 17, 3]
                 old_max, old_waste = LegendHDF5IO.scatter_bulk_max_bytes[],
                     LegendHDF5IO.scatter_bulk_max_waste[]
@@ -228,6 +242,7 @@ using Unitful
                     LegendHDF5IO.scatter_bulk_max_bytes[] = typemax(Int)
                     @test A[tune] == x[tune]
                     @test W[tune] == VectorOfSimilarVectors(data)[tune]
+                    @test LegendHDF5IO._scatter_limits(true) == (typemax(Int), 2.5)
                 finally
                     LegendHDF5IO.scatter_bulk_max_bytes[] = old_max
                     LegendHDF5IO.scatter_bulk_max_waste[] = old_waste
@@ -301,6 +316,16 @@ using Unitful
                 sp2 = [2, 3, 4, 700, 1999]
                 @test lhd["x"][sp] == x[sp]
                 @test lhd["aofa"].data[:, sp2] == data[:, sp2]
+            end
+            # files that do not exist on disk, such as in-memory ones, read with
+            # the default thresholds:
+            fid = HDF5.h5open(tempname(), "w"; driver = HDF5.Drivers.Core(backing_store = false))
+            try
+                lhd = LHDataStore(fid, false)
+                lhd["x"] = collect(1.0:100)
+                @test lhd["x"][[1, 4]] == [1.0, 4.0]
+            finally
+                close(fid)
             end
         end
     end
