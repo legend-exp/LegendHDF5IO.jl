@@ -325,6 +325,15 @@ function getdatatype(input::Union{HDF5.Dataset, HDF5.H5DataStore})
     isempty(dtstr) ? default_datatype(input) : datatype_from_string(dtstr)
 end
 
+# Whether a datatype reads as a table. Registered names come first: some
+# types are stored as tables but read as something else, such as waveforms,
+# and tables may be registered under names of their own:
+function _is_table_datatype(dtstr::AbstractString)
+    isnothing(match(datatype_regexp, dtstr)) && return false
+    T = lock(() -> get(_datatype_dict, _sort_datatype_fields(dtstr), nothing), _registry_lock)
+    isnothing(T) ? startswith(dtstr, "table{") : T <: StructArrays.StructArray{<:NamedTuple}
+end
+
 function setdatatype!(output::Union{HDF5.Dataset, HDF5.H5DataStore}, datatype::Type)
     dtstr = datatype_to_string(datatype)
     hasattribute(output, :datatype) && HDF5.delete_attribute(output, "datatype")
