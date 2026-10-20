@@ -1065,12 +1065,13 @@ struct AboveHalf end
             end
 
             lh5open(fn, "r") do lhd
-                # concatenation would read the rows one at a time, so lazy tables refuse it:
+                # lazy tables concatenate lazily, while concatenating them with other arrays
+                # would read the rows one at a time:
                 tbl = lhd["tbl"]
-                @test_throws ArgumentError vcat(tbl, tbl)
-                @test_throws ArgumentError vcat(tbl, tbl, tbl)
+                @test vcat(tbl, tbl) isa LH5ChainedTable
+                @test length(vcat(tbl, tbl, tbl)) == 3n
+                @test reduce(vcat, [tbl, tbl]) isa LH5ChainedTable
                 @test_throws ArgumentError [tbl; tbl[:]]
-                @test_throws ArgumentError reduce(vcat, [tbl, tbl])
                 @test_throws ArgumentError vcat(tbl[:], tbl)
                 @test_throws ArgumentError vcat(tbl, tbl[:])
                 @test_throws ArgumentError reduce(vcat, [tbl, tbl]; init = tbl[1:0])
@@ -1316,6 +1317,215 @@ struct AboveHalf end
                 # other tables join with their columns:
                 @test innermerge(ta, (w = y,)).w === y
                 @test innermerge(ta, StructArray((w = y,))).w === y
+            end
+        end
+    end
+
+    @testset "chained tables" begin
+        mktempdir() do dir
+            ns = (7, 0, 9)
+            fns = [joinpath(dir, "part$i.lh5") for i in 1:3]
+            trng = range(0.0u"μs", 1.0u"μs"; length = 4)
+            mem = map(ns) do n
+                StructArray((
+                    x = rand(Float32, n), b = rand(Int32, n), s = [string(i) for i in 1:n],
+                    v = VectorOfVectors([rand(Float32, rand(0:3)) for _ in 1:n]),
+                    sv = [SVector(i, 2i) for i in 1:n],
+                    wf = ArrayOfRDWaveforms((fill(trng, n), VectorOfSimilarVectors(rand(UInt16, 4, n)))),
+                    sub = StructArray((c = rand(n),)),
+                ))
+            end
+            for (fn, t) in zip(fns, mem)
+                lh5open(lhd -> lhd["t"] = t, fn, "w")
+            end
+            lh5open(lhd -> lhd["u"] = StructArray((x = rand(3),)), fns[1], "r+")
+            joined(f) = reduce(vcat, map(t -> collect(f(t)), mem))
+            xs, bs = joined(t -> t.x), joined(t -> t.b)
+            hs = lh5open.(fns)
+            try
+                ts = [h["t"] for h in hs]
+                c = vcat(ts...)
+                @test c isa LH5ChainedTable && c isa AbstractLH5Table
+                @test length(c) == sum(ns) && propertynames(c) == propertynames(ts[1])
+                rows = c[:]
+                @test rows isa StructArray && rows.x == xs && rows.b == bs
+                @test rows.s == joined(t -> t.s) && rows.sv == joined(t -> t.sv)
+                @test collect(rows.v) == joined(t -> t.v)
+                @test [w.signal for w in rows.wf] == joined(t -> [w.signal for w in t.wf])
+                @test [w.time for w in rows.wf] == joined(t -> [w.time for w in t.wf])
+                @test rows.sub.c == joined(t -> t.sub.c)
+                # rows across parts come in the order asked for, duplicates included:
+                @test c[[9, 1, 9, 16]] == rows[[9, 1, 9, 16]]
+                @test c[6:9] == rows[6:9]
+                @test c[3] == rows[3]
+                mask = c.x .> 0.5f0
+                @test c[mask] == rows[xs .> 0.5f0]
+                @test_throws BoundsError c[[17]]
+                @test_throws BoundsError c[0:1]
+                @test_throws BoundsError c[trues(3)]
+                # columns concatenate lazily, as the parts store them:
+                @test c.x isa DiskArrays.AbstractDiskArray && c.x[:] == xs
+                @test collect(c.v) == joined(t -> t.v) && c.s[:] == joined(t -> t.s)
+                @test c.wf[10].signal == mem[3].wf[3].signal
+                @test c.sub isa LH5ChainedTable && c.sub.c[:] == joined(t -> t.sub.c)
+                @test [r.b for r in c] == bs
+                @test (@pf $x * 2).(c) == 2 .* xs
+                @test filterby(@pf $b > 0)(c) == rows[bs .> 0]
+                @test Tables.columns(c) isa LH5LazyColumns
+                # vecflattened and reduce(vcat, ...) chain as vcat does, and chains of chains stay flat:
+                @test vecflattened(ts) isa LH5ChainedTable && vecflattened(ts).b[:] == bs
+                @test reduce(vcat, ts).x[:] == xs
+                @test length(LegendHDF5IO._chain_parts(vcat(c, ts[1]))) == 4
+                @test first(c, 3) == rows[1:3] && first(c).x == xs[1]
+                @test !isempty(c) && isempty(vcat(ts[2], ts[2]))
+                @test_throws ArgumentError vcat(ts[1], hs[1]["u"])
+                @test_throws ArgumentError append!(c, rows[1:1])
+                @test_throws ArgumentError vcat(ts[1], ts[1][:])
+                lh5open(joinpath(dir, "merged.lh5"), "w") do lhd
+                    lhd["t"] = c
+                end
+                lh5open(joinpath(dir, "merged.lh5"), "r") do lhd
+                    @test lhd["t"][:] == rows
+                end
+            finally
+                close.(hs)
+            end
+            # a chain shows its parts as they are, also after appends to them:
+            lh5open(joinpath(dir, "grow.lh5"), "w"; usechunks = true) do lhd
+                lhd["a"] = StructArray((x = [1, 2],))
+                lhd["b"] = StructArray((x = [3, 4],))
+                ta, tb = lhd["a"], lhd["b"]
+                c = vcat(ta, tb)
+                @test length(c) == 4 && c.x[:] == [1, 2, 3, 4]
+                append!(ta, StructArray((x = [5],)))
+                @test length(c) == 5 && [r.x for r in c] == [1, 2, 5, 3, 4]
+                @test c[3].x == 5 && c.x[:] == [1, 2, 5, 3, 4]
+            end
+            # the columns of a chain are read-only, the tables they come from stay as they are:
+            lh5open(joinpath(dir, "readonly.lh5"), "w") do lhd
+                lhd["a"] = StructArray((x = collect(1:10), v = VectorOfVectors([[i] for i in 1:10])))
+                lhd["b"] = StructArray((x = collect(11:20), v = VectorOfVectors([[i] for i in 11:20])))
+                ta, tb = lhd["a"], lhd["b"]
+                c = vcat(ta, tb)
+                @test_throws ArgumentError c.x[[1, 1, 1, 5]] = fill(99, 4)
+                @test_throws ArgumentError c.x .= 0
+                @test_throws ArgumentError c.v[12] .= 0
+                lhd["e"] = StructArray((x = Int[], v = VectorOfVectors([Int[] for _ in 1:0])))
+                @test_throws ArgumentError (vcat(ta, lhd["e"]).x .= 99)
+                @test_throws ArgumentError (vcat(ta).x .= 99)
+                @test_throws ArgumentError (vcat(ta).v[1] .= 99)
+                @test ta.x[:] == 1:10 && tb.x[:] == 11:20 && collect(tb.v)[2] == [12] && collect(ta.v)[1] == [1]
+            end
+            # a column must have as many rows as the other columns of its part:
+            lh5open(joinpath(dir, "misaligned.lh5"), "w"; usechunks = true) do lhd
+                lhd["a"] = StructArray((x = [1], y = [3]))
+                lhd["b"] = StructArray((x = [5], y = [6]))
+                append!(lhd["a"].x, [2])
+                append!(lhd["b"].y, [7])
+                c = vcat(lhd["a"], lhd["b"])
+                @test_throws DimensionMismatch c.y
+                @test_throws DimensionMismatch (@pf $x + $y).(c)
+                # also when a join reads the rows of some columns only:
+                j = innermerge(c, (x = zeros(Int, length(c)),))
+                @test_throws DimensionMismatch j[:]
+                @test_throws DimensionMismatch [r.y for r in j]
+            end
+            # nested tables that are chains themselves:
+            lh5open(joinpath(dir, "nestedchain.lh5"), "w") do lhd
+                lhd["a"] = StructArray((x = [1, 2],))
+                a = lhd["a"]
+                p = LH5JoinedTable((sub = vcat(a, a),))
+                c = vcat(p, p)
+                @test length(c.sub) == 8 && c.sub.x[:] == repeat([1, 2], 4) && length(c[:]) == 8
+            end
+            # nested tables must agree in their columns, for rows as for columns:
+            lh5open(joinpath(dir, "nested.lh5"), "w") do lhd
+                lhd["a"] = StructArray((x = [1], sub = StructArray((y = [1],))))
+                lhd["b"] = StructArray((x = [2], sub = StructArray((y = [2], extra = [99]))))
+                c = vcat(lhd["a"], lhd["b"])
+                @test_throws ArgumentError c[:]
+                @test_throws ArgumentError c.sub
+            end
+            # rows take the column order of the first table, also in nested tables:
+            lh5open(joinpath(dir, "order.lh5"), "w") do lhd
+                lhd["a"] = StructArray((a = [1f0], b = Int32[2], sub = StructArray((c = [1], d = [2]))))
+                lhd["b"] = StructArray((b = Int32[3], a = [4f0], sub = StructArray((d = [5], c = [6]))))
+                c = vcat(lhd["a"], lhd["b"])
+                rows = [r for r in c]
+                @test all(r -> keys(r) == (:a, :b, :sub) && keys(r.sub) == (:c, :d), rows)
+                @test rows == collect(c[:]) && c[2].sub.c == 6
+            end
+            # columns of different kinds or units do not concatenate:
+            lh5open(joinpath(dir, "kinds.lh5"), "w") do lhd
+                lhd["flat"] = StructArray((x = [1f0, 2f0],))
+                lhd["ragged"] = StructArray((x = VectorOfVectors([[1f0], [2f0]]),))
+                lhd["units"] = StructArray((x = [1f0, 2f0] .* u"keV",))
+                for (p, q) in (("flat", "ragged"), ("ragged", "flat"), ("flat", "units"))
+                    c = vcat(lhd[p], lhd[q])
+                    @test_throws ArgumentError c.x
+                    @test_throws ArgumentError c[:]
+                end
+            end
+            # encoded arrays concatenate only with arrays of the same decoded type:
+            lh5open(joinpath(dir, "encoded.lh5"), "w") do lhd
+                codec = VarlenDiffArrayCodec()
+                enc(T, n) = StructArray((
+                    e = broadcast(|>, VectorOfArrays([T.(rand(-5:5, 3)) for _ in 1:n]), codec),
+                    es = broadcast(|>, convert(VectorOfSimilarVectors, [T.(rand(-5:5, 3)) for _ in 1:n]), codec),
+                ))
+                lhd["i8"], lhd["i16"], lhd["i8b"] = enc(Int8, 2), enc(Int16, 2), enc(Int8, 3)
+                c = vcat(lhd["i8"], lhd["i8b"])
+                @test c[:].e == vcat(lhd["i8"][:].e, lhd["i8b"][:].e) && c.es[4] == lhd["i8b"].es[2]
+                c = vcat(lhd["i8"], lhd["i16"])
+                @test_throws ArgumentError c.e
+                @test_throws ArgumentError c.es
+                @test_throws ArgumentError c[:]
+            end
+            # nested tables that are lazy in one part and in memory in another:
+            lh5open(joinpath(dir, "mixednested.lh5"), "w") do lhd
+                lhd["s"] = StructArray((z = [1, 2],))
+                s = lhd["s"]
+                p, q = LH5JoinedTable((sub = s,)), LH5JoinedTable((sub = s[:],))
+                @test vcat(p, q).sub.z[:] == [1, 2, 1, 2] && vcat(q, p).sub.z[:] == [1, 2, 1, 2]
+                @test vcat(p, q)[:].sub.z == [1, 2, 1, 2]
+            end
+            # columns that may hold missing values concatenate:
+            lh5open(joinpath(dir, "nullable.lh5"), "w") do lhd
+                lhd["a"] = StructArray((x = [1, 2],))
+                t = innermerge(lhd["a"], (tag = Union{Missing, Int}[1, missing],))
+                c = vcat(t, t)
+                @test isequal(c.tag, [1, missing, 1, missing]) && isequal(c[:].tag, [1, missing, 1, missing])
+            end
+            # parts without rows have no say in the inner size of a column:
+            lh5open(joinpath(dir, "emptyinner.lh5"), "w") do lhd
+                lhd["a"] = StructArray((v = VectorOfSimilarVectors(rand(Float32, 4, 2)),))
+                lhd["b"] = StructArray((v = VectorOfSimilarVectors(zeros(Float32, 0, 0)),))
+                lhd["c"] = StructArray((v = VectorOfSimilarVectors(rand(Float32, 4, 3)),))
+                c = vcat(lhd["a"], lhd["b"], lhd["c"])
+                @test length(c.v) == 5 && c.v[3] == lhd["c"].v[1] && c[:].v[5] == lhd["c"].v[3]
+            end
+            # ragged arrays whose elements do not start at the beginning of their data:
+            vv = VectorOfVectors([[1.0, 2], [3.0], [4.0, 5, 6], [7.0, 8]])
+            cv = vcat(LH5JoinedTable((w = view(vv, 2:3),)), LH5JoinedTable((w = view(vv, 3:4),)))
+            @test collect(cv.w) == collect(vv)[[2, 3, 3, 4]] && collect(cv[:].w) == collect(vv)[[2, 3, 3, 4]]
+            # arrays of empty arrays still count their rows:
+            lh5open(joinpath(dir, "zero.lh5"), "w") do lhd
+                lhd["a"] = StructArray((v = VectorOfSimilarVectors(zeros(Float32, 0, 2)),))
+                lhd["b"] = StructArray((v = VectorOfSimilarVectors(zeros(Float32, 0, 3)),))
+                c = vcat(lhd["a"], lhd["b"])
+                @test length(c) == 5 && length(c.v) == 5 && length(c[:]) == 5
+                @test c[:].v[4] == Float32[] && c.v[5] == Float32[]
+            end
+
+            hs = lh5open.(fns)
+            try
+                ts = [h["t"] for h in hs]
+                # the first rows are read from the first part only:
+                c = vcat(ts...)
+                @test first(c, 3).x == xs[1:3]
+                @test isempty(keys(LegendHDF5IO._table_columns(ts[3])))
+            finally
+                close.(hs)
             end
         end
     end
