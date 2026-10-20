@@ -3,27 +3,28 @@
 """
     AbstractLH5Table <: AbstractVector{NamedTuple}
 
-Supertype of the lazy tables of LH5 data: [`LH5LazyTable`](@ref) and
-[`LH5JoinedTable`](@ref).
+Supertype of the lazy tables of LH5 data: [`LH5LazyTable`](@ref),
+[`LH5JoinedTable`](@ref) and [`LH5ChainedTable`](@ref).
 
-A lazy table is a vector of `NamedTuple` rows whose column names are known,
-while their element types are only known once a column is opened. Accessing
+A lazy table is a vector of `NamedTuple` rows. Its column names are known up
+front, the element type of a column only once the column is opened. Accessing
 a column, with `tbl.colname` or `Tables.getcolumn`, opens that column and no
 other, and `Tables.columns(tbl)` is a dictionary of the columns (see
 [`LH5LazyColumns`](@ref)). Column-wise broadcasts, such as PropertyFunctions,
 open only the columns they use.
 
 Treating the table as an array opens all columns. Indexing with a range,
-index vector or mask reads the selected rows into a `StructArray`, `tbl[:]`
-reads the whole table. Iteration reads the rows in blocks of a few thousand,
-so loops, comprehensions and `map` read neither one row at a time nor
-everything at once. `filter`, `findall` and reductions go through iteration,
-`sort` and `sortperm` read the table first. Concatenation is refused, and so
-is `StructArray(tbl)`: once a column was read eagerly, such a `StructArray`
+index vector or mask reads the selected rows into a `StructArray`, and
+`tbl[:]` reads the whole table. Iteration reads the rows in blocks of a few
+thousand, so loops, comprehensions and `map` read neither one row at a time
+nor everything at once. `filter`, `findall` and reductions go through
+iteration, while `sort` and `sortperm` read the table first. `vcat` of lazy
+tables chains them, and concatenation with other arrays is refused. So is
+`StructArray(tbl)`: once a column was read eagerly, such a `StructArray`
 would slice and append rows with a stale row type and bypass the append
 checks.
 
-Lazy tables stop working when the file they read from is closed, the rows
+Lazy tables stop working when the file they read from is closed. The rows
 read from them do not.
 
 # Implementation
@@ -238,27 +239,39 @@ Base.filter(f, tbl::AbstractLH5Table) = tbl[findall(map(f, tbl))]
 Base.sort(tbl::AbstractLH5Table; kw...) = sort(tbl[:]; kw...)
 Base.sortperm(tbl::AbstractLH5Table; kw...) = sortperm(tbl[:]; kw...)
 
-# Concatenation would copy the rows one at a time. A table in the first two
-# positions among arrays is caught, as is a reduction over a vector of tables;
-# a table behind two arrays is not. vcat has methods for vectors alone, which
-# need guards of their own to stay unambiguous:
-_lazy_concat() = throw(ArgumentError("Lazy tables cannot be concatenated, read them with tbl[:] first"))
+# Lazy tables concatenate lazily with each other (see LH5ChainedTable). The
+# second method resolves the ambiguity with the guards below:
+Base.vcat(tbl::AbstractLH5Table, tbls::AbstractLH5Table...) = _chain_tables(Any[tbl, tbls...])
+Base.vcat(tbl1::AbstractLH5Table, tbl2::AbstractLH5Table, tbls::AbstractLH5Table...) =
+    _chain_tables(Any[tbl1, tbl2, tbls...])
+Base.reduce(::typeof(vcat), tbls::AbstractVector{<:AbstractLH5Table}) = _chain_tables(tbls)
+ArraysOfArrays.vecflattened(tbls::AbstractVector{<:AbstractLH5Table}) = _chain_tables(tbls)
+
+# Concatenated with other arrays, they would be copied a row at a time. A
+# table in the first two positions among arrays is caught, but not one behind
+# two arrays. vcat has methods for vectors alone, which need guards of their
+# own to stay unambiguous:
+_lazy_concat(::typeof(vcat)) = throw(ArgumentError(
+    "Lazy tables concatenate with lazy tables only, read them with tbl[:] first"))
+_lazy_concat(::typeof(cat)) = throw(ArgumentError("Concatenate lazy tables with vcat"))
+_lazy_concat(::typeof(hcat)) = throw(ArgumentError(
+    "Lazy tables only concatenate vertically, join their columns with innermerge"))
 for f in (:vcat, :hcat)
     @eval begin
-        Base.$f(::AbstractLH5Table, ::AbstractVecOrMat...) = _lazy_concat()
-        Base.$f(::AbstractVecOrMat, ::AbstractLH5Table, ::AbstractVecOrMat...) = _lazy_concat()
-        Base.$f(::AbstractLH5Table, ::AbstractLH5Table, ::AbstractVecOrMat...) = _lazy_concat()
-        Base.reduce(::typeof($f), ::AbstractVector{<:AbstractLH5Table}) = _lazy_concat()
+        Base.$f(::AbstractLH5Table, ::AbstractVecOrMat...) = _lazy_concat($f)
+        Base.$f(::AbstractVecOrMat, ::AbstractLH5Table, ::AbstractVecOrMat...) = _lazy_concat($f)
+        Base.$f(::AbstractLH5Table, ::AbstractLH5Table, ::AbstractVecOrMat...) = _lazy_concat($f)
     end
 end
-Base.vcat(::AbstractVector, ::AbstractLH5Table, ::AbstractVector...) = _lazy_concat()
-Base.vcat(::AbstractLH5Table, ::AbstractLH5Table, ::AbstractVector...) = _lazy_concat()
-Base.cat(::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat()
-Base.cat(::AbstractArray, ::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat()
-Base.cat(::AbstractLH5Table, ::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat()
+Base.reduce(::typeof(hcat), ::AbstractVector{<:AbstractLH5Table}) = _lazy_concat(hcat)
+Base.vcat(::AbstractVector, ::AbstractLH5Table, ::AbstractVector...) = _lazy_concat(vcat)
+Base.vcat(::AbstractLH5Table, ::AbstractLH5Table, ::AbstractVector...) = _lazy_concat(vcat)
+Base.cat(::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat(cat)
+Base.cat(::AbstractArray, ::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat(cat)
+Base.cat(::AbstractLH5Table, ::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat(cat)
 # DiskArrays has cat methods of the same shape:
-Base.cat(::AbstractLH5Table, ::DiskArrays.AbstractDiskArray, ::AbstractArray...; dims) = _lazy_concat()
-Base.cat(::DiskArrays.AbstractDiskArray, ::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat()
+Base.cat(::AbstractLH5Table, ::DiskArrays.AbstractDiskArray, ::AbstractArray...; dims) = _lazy_concat(cat)
+Base.cat(::DiskArrays.AbstractDiskArray, ::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat(cat)
 
 """
     LH5LazyColumns <: AbstractDict{Symbol, AbstractVector}
