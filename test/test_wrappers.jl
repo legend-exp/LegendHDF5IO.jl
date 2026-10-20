@@ -8,12 +8,18 @@ using DiskArrays
 using EncodedArrays
 using HDF5
 using Measurements
+using PropertyFunctions
 using RadiationDetectorSignals
 using StaticArrays
 using StatsBase
 using StructArrays
 using Tables
 using Unitful
+
+import DataAPI
+
+struct AboveHalf end
+(::AboveHalf)(row) = row.a > 0.5f0
 
 @testset verbose=true "test wrapper" begin
     @testset verbose=true "reading and writing" begin
@@ -698,9 +704,9 @@ using Unitful
                     lhd["tbl_svec"] = StructArray((s = [SVector(1, 2), SVector(3, 4)], a = [1, 2]))
                     @test_throws ArgumentError append!(lhd["tbl_svec"], StructArray((s = [SVector(5, 6)], a = [3])))
                     @test lhd["tbl_svec"][:].a == [1, 2]
-                    # the StructArray conversion appends waveform columns with their time axes:
+                    # a StructArray over the stored columns appends waveform columns with their time axes:
                     lhd["tbl_wf2"] = StructArray((e = [1.0, 2.0], wf = wf))
-                    s = StructArray(lhd["tbl_wf2"])
+                    s = StructArray(Tables.columntable(lhd["tbl_wf2"]))
                     append!(s, s)
                     @test lhd["tbl_wf2"][:] == vcat(StructArray((e = [1.0, 2.0], wf = wf)), StructArray((e = [1.0, 2.0], wf = wf)))
                     # nested tables are checked against their stored columns as well:
@@ -709,6 +715,27 @@ using Unitful
                     t[:]
                     add_entries!(lhd, "tbl_nest/sub", StructArray((c = [5, 6],)))
                     @test_throws ArgumentError append!(t, StructArray((a = [7], sub = StructArray((b = [8],)))))
+                    # a StructArray over the stored columns, nested table included, appends like the
+                    # handle and checks the stored columns at every level before it writes:
+                    lhd["tbl_nest2"] = StructArray((a = [1, 2], sub = StructArray((b = [3, 4],))))
+                    c = StructArray(Tables.columntable(lhd["tbl_nest2"]))
+                    @test c isa LegendHDF5IO.LH5Table
+                    append!(c, StructArray((a = [7], sub = StructArray((b = [8],)))))
+                    @test lhd["tbl_nest2"][:] == StructArray((a = [1, 2, 7], sub = StructArray((b = [3, 4, 8],))))
+                    add_entries!(lhd, "tbl_nest2/sub", StructArray((e = [5, 6, 7],)))
+                    @test_throws ArgumentError append!(c, c)
+                    add_entries!(lhd, "tbl_nest2", StructArray((d = [5, 6, 7],)))
+                    @test_throws ArgumentError append!(c, c)
+                    @test lhd["tbl_nest2"][:].a == [1, 2, 7]
+                    # a replaced nested column is reopened before the stored columns are checked:
+                    lhd["tbl_nest3"] = StructArray((a = [1, 2], sub = StructArray((b = [3, 4], c = [5, 6]))))
+                    c3 = StructArray(Tables.columntable(lhd["tbl_nest3"]))
+                    c3[:]
+                    delete_entry!(lhd, "tbl_nest3/sub/b")
+                    add_entries!(lhd, "tbl_nest3/sub", StructArray((b = [30, 40],)))
+                    append!(c3, StructArray((a = [5], sub = StructArray((b = [50], c = [7])))))
+                    rows3 = lhd["tbl_nest3"][:]
+                    @test rows3.a == [1, 2, 5] && rows3.sub.b == [30, 40, 50] && rows3.sub.c == [5, 6, 7]
                     @test length(lhd["tbl_nest/a"]) == 2 && length(lhd["tbl_nest/sub/b"]) == 2
                 end
                 @testset "append from aliased and inconsistent sources" begin
@@ -726,17 +753,19 @@ using Unitful
                     @test_throws ArgumentError append!(lhd["tbl_src"], stale)
                     @test length(lhd["tbl_src"]) == 3
                 end
-                @testset "append through a table handle keeps its StructArray coherent" begin
+                @testset "append through a table handle keeps its columns coherent" begin
                     lhd["tbl_coh"] = StructArray((a = [1.0, 2.0], v = VectorOfVectors([[1], [2, 3]])))
                     t = lhd["tbl_coh"]
-                    typed = StructArray(t)
+                    cols = StructArray(Tables.columntable(t))
                     append!(t, StructArray((a = [3.0], v = VectorOfVectors([[4, 5]]))))
-                    @test length(typed) == 3
-                    @test typed[3] == (a = 3.0, v = [4, 5])
-                    @test StructArray(t) === typed
-                    # appends through a StructArray conversion check the stored columns as well:
+                    @test length(t) == 3
+                    @test t[3] == (a = 3.0, v = [4, 5])
+                    # a StructArray built from the columns sees the appended rows:
+                    @test length(cols) == 3
+                    @test cols[3] == (a = 3.0, v = [4, 5])
+                    # appends through such a StructArray check the stored columns as well:
                     add_entries!(lhd, "tbl_coh", StructArray((c = [7, 8, 9],)))
-                    @test_throws ArgumentError append!(typed, StructArray((a = [4.0], v = VectorOfVectors([[6]]))))
+                    @test_throws ArgumentError append!(cols, StructArray((a = [4.0], v = VectorOfVectors([[6]]))))
                     @test lhd["tbl_coh"][:].c == [7, 8, 9]
                 end
                 @testset "rejected appends leave datasets unchanged" begin
@@ -910,6 +939,7 @@ using Unitful
                 # a table of tables, and one mixing eagerly read and disk-backed columns:
                 lhd["nested"] = StructArray((x = StructArray((a = a,)), y = StructArray((b = b, vov = vov))))
                 lhd["mixed"] = StructArray((sv = sv, vov = vov))
+                lhd["vfirst"] = StructArray((vov = vov, a = a))
             end
 
             opened(tbl) = keys(LegendHDF5IO._table_columns(tbl))
@@ -948,11 +978,19 @@ using Unitful
             lh5open(fn, "r") do lhd
                 tbl = lhd["tbl"]
                 @test length(tbl) == n
-                # the row count needs one column, not all of them:
-                @test length(opened(tbl)) == 1
+                # the row count comes from the shape of a column, which is not even opened:
+                @test isempty(opened(tbl))
                 @test size(tbl) == (n,)
                 @test !isempty(tbl)
                 @test firstindex(tbl) == 1 && lastindex(tbl) == n
+                @test tbl isa AbstractVector{NamedTuple}
+                @test eltype(tbl) === NamedTuple
+                @test axes(tbl) == (1:n,)
+                @test IndexStyle(tbl) === IndexLinear()
+                # a flat column gives the row count from its shape, a ragged one would read its element pointers:
+                vfirst = lhd["vfirst"]
+                @test length(vfirst) == n
+                @test :vov ∉ opened(vfirst)
             end
 
             lh5open(fn, "r") do lhd
@@ -978,17 +1016,59 @@ using Unitful
                 @test Tables.columnindex(tbl, :nope) == 0
                 @test Tables.columntype(tbl, :b) == Int32
                 @test Tables.subset(tbl, 2:3) == tbl[2:3]
-                @test Tables.subset(tbl, 2:3; viewhint = true) == tbl[2:3]
-                # Tables.jl consumers get nested tables as arrays, column access keeps them lazy:
+                @test Tables.subset(tbl, 2:3; viewhint = true) isa StructArray
+                @test Tables.subset(tbl, 3; viewhint = true) == tbl[3]
+                @test Tables.rowaccess(tbl)
+                @test Tables.rowtable(tbl)[2].b == b[2]
+                # a view keeps the table's columns, also when it selects no rows:
+                @test Tables.columntable(view(tbl, 2:3)).a == a[2:3]
+                @test keys(Tables.columntable(view(tbl, falses(n)))) == (:a, :b, :vov)
+                @test DataAPI.nrow(tbl) == n && DataAPI.ncol(tbl) == 3
+                # nested tables are columns in their own right:
                 nested = lhd["nested"]
-                @test Tables.getcolumn(nested, :y) isa StructArray
+                @test Tables.getcolumn(nested, :y) === nested.y
                 @test nested.y isa LH5LazyTable
             end
 
             lh5open(fn, "r") do lhd
-                # concatenating lazy tables is not supported yet, read them first:
+                # the columns come as an ordered, read-only dictionary that opens them on demand:
+                tbl = lhd["tbl"]
+                cols = Tables.columns(tbl)
+                @test cols isa AbstractDict{Symbol, AbstractVector}
+                @test length(cols) == 3
+                @test !isempty(cols)
+                @test DataAPI.ncol(tbl) == 3
+                @test Tables.rows(cols) === tbl
+                @test collect(keys(cols)) == [:a, :b, :vov]
+                @test haskey(cols, :a) && !haskey(cols, :nope)
+                @test get(cols, :nope, nothing) === nothing
+                @test_throws KeyError cols[:nope]
+                str = sprint(show, cols)
+                @test all(name -> occursin(name, str), ("a", "b", "vov"))
+                @test sprint(show, MIME"text/plain"(), cols) == str
+                @test isempty(opened(tbl))
+                @test cols.a === tbl.a
+                @test cols[:b] === tbl.b
+                @test Tables.getcolumn(cols, :a) === tbl.a
+                @test Tables.getcolumn(cols, 2) === tbl.b
+                @test Set(opened(tbl)) == Set([:a, :b])
+                @test isnothing(Tables.schema(cols))
+                @test collect(Tables.columnnames(cols)) == [:a, :b, :vov]
+                @test [k for (k, v) in cols] == [:a, :b, :vov]
+                @test merge((x = 1,), cols).vov === tbl.vov
+                ct = Tables.columntable(tbl)
+                @test keys(ct) == (:a, :b, :vov) && ct.a === tbl.a
+                # materializing a Tables.jl source the way a lazy table does reads it into memory:
+                mat = Tables.materializer(tbl)((a = tbl.a, b = tbl.b))
+                @test mat isa StructArray && mat.a isa Vector{Float32} && mat.a == a
+            end
+
+            lh5open(fn, "r") do lhd
+                # concatenation would read the rows one at a time, so lazy tables refuse it:
                 tbl = lhd["tbl"]
                 @test_throws ArgumentError vcat(tbl, tbl)
+                @test_throws ArgumentError vcat(tbl, tbl, tbl)
+                @test_throws ArgumentError [tbl; tbl[:]]
                 @test_throws ArgumentError reduce(vcat, [tbl, tbl])
                 @test_throws ArgumentError vcat(tbl[:], tbl)
                 @test_throws ArgumentError vcat(tbl, tbl[:])
@@ -1010,18 +1090,23 @@ using Unitful
 
             lh5open(fn, "r") do lhd
                 tbl = lhd["tbl"]
-                typed = StructArray(tbl)
-                @test typed isa LegendHDF5IO.LH5Table
-                # repeated conversion must reuse the same table:
-                @test StructArray(tbl) === typed
+                # a StructArray over the disk-backed columns would slice and append with a stale row type:
+                @test_throws ArgumentError StructArray(tbl)
+                @test_throws ArgumentError StructVector(tbl)
+                @test_throws ArgumentError convert(StructArray, tbl)
+                @test_throws ArgumentError StructArray(tbl; unwrap = t -> false)
+                rows = tbl[:]
+                @test rows isa StructArray && rows.a isa Vector{Float32}
                 @test tbl[1:4].a == a[1:4]
                 @test collect(tbl.a[1:4]) == a[1:4]
                 @test (x -> 2x).(tbl.a) == 2 .* a
                 @test first(tbl).a == a[1]
-                @test tbl == typed
+                @test tbl == rows
                 @test tbl == tbl[:] && tbl[:] == tbl
+                @test isequal(tbl, rows) && isequal(rows, tbl) && isequal(tbl, lhd["tbl"])
                 @test hash(tbl) == hash(tbl[:])
                 @test collect(tbl) == collect(tbl[:])
+                @test copy(tbl) == rows && copy(tbl) isa StructArray
                 @test eltype(first(tbl, 2)) <: NamedTuple
                 # a lazy mask selects rows like an in-memory one, and masks must fit the table:
                 mask = tbl.a .> 0.5f0
@@ -1035,9 +1120,74 @@ using Unitful
             end
 
             lh5open(fn, "r") do lhd
+                tbl = lhd["tbl"]
+                rows = tbl[:]
+                # generic consumers see the rows in order, selections and sorts come back as StructArrays:
+                @test [r.a for r in tbl] == a
+                @test map(r -> r.b, tbl) == b
+                acc = Float32[]
+                foreach(r -> push!(acc, r.a), tbl)
+                @test acc == a
+                @test sum(r -> r.b, tbl) == sum(b)
+                @test maximum(r -> r.a, tbl) == maximum(a)
+                @test count(r -> r.a > 0.5f0, tbl) == count(>(0.5f0), a)
+                @test mapreduce(r -> r.b, +, tbl; init = 1) == sum(b) + 1
+                @test rows[3] in tbl
+                sel = filter(r -> r.a > 0.5f0, tbl)
+                @test sel isa StructArray && sel.a == a[a .> 0.5f0]
+                @test findall(r -> r.a > 0.5f0, tbl) == findall(a .> 0.5f0)
+                @test findall(in(rows[2:3]), tbl) == [2, 3]
+                sorted = sort(tbl; by = r -> r.b)
+                @test sorted isa StructArray && sorted.b == sort(b)
+                @test sortperm(tbl; by = r -> r.b) == sortperm(b)
+                @test first(tbl, 3) == rows[1:3] && last(tbl, 3) == rows[end-2:end]
+                @test reverse(tbl) == reverse(rows)
+                @test view(tbl, 2:3) == rows[2:3]
+                @test view(tbl, 2:3)[1] == rows[2]
+                @test size(tbl[[1 2; 3 4]]) == (2, 2) && tbl[[1 2; 3 4]][2, 1].a == a[3]
+                @test Vector(tbl) == collect(rows)
+                @test Vector{eltype(rows)}(tbl) == collect(rows)
+                @test append!(NamedTuple[], tbl) == collect(rows)
+                @test filter(AboveHalf(), tbl) == sel
+                @test sum(r -> r.b, tbl; dims = 1) == [sum(b)]
+                dest = Vector{NamedTuple}(undef, 5)
+                @test copyto!(dest, 2, tbl, 3, 2)[2:3] == collect(rows[3:4])
+                @test copyto!(dest, 1, tbl, 1, 0) === dest
+            end
+
+            # a row read on its own holds its data like the rows of a block do:
+            row = lh5open(lhd -> lhd["tbl"][2], fn, "r")
+            @test row.vov == vov[2]
+
+            # iteration reads rows in blocks, and the blocks must join up without gaps:
+            fn_long = joinpath(dir, "long.lh5")
+            m = 2 * LegendHDF5IO._rows_per_block + 7
+            x = rand(Int32, m)
+            lh5open(fn_long, "w") do lhd
+                lhd["long"] = StructArray((x = x,))
+            end
+            lh5open(fn_long, "r") do lhd
+                tbl = lhd["long"]
+                @test [r.x for r in tbl] == x
+                @test sum(r -> r.x, tbl) == sum(x)
+                @test filter(r -> iseven(r.x), tbl).x == filter(iseven, x)
+                @test collect(Iterators.drop(tbl, m - 2)) == [(x = x[m - 1],), (x = x[m],)]
+            end
+
+            lh5open(fn, "r") do lhd
+                # property functions use the column access, so they open only the columns they use:
+                tbl = lhd["tbl"]
+                @test (@pf $a * 2).(tbl) == 2 .* a
+                @test Set(opened(tbl)) == Set([:a])
+                @test filterby(@pf $b > 0)(tbl) == tbl[:][b .> 0]
+                nt = (@pf (c = $a, d = $b)).(tbl)
+                @test nt isa StructArray && nt.c == a && nt.d == b
+            end
+
+            lh5open(fn, "r") do lhd
                 nested = lhd["nested"]
                 @test nested.y isa LH5LazyTable
-                @test StructArray(nested)[1:3].y.vov == vov[1:3]
+                @test nested[1:3].y.vov == vov[1:3]
                 @test nested[2].y.b == b[2]
                 @test readdata(lhd.data_store, "nested").x.a == a
                 # slices rebuild the row type from the sliced columns:
@@ -1058,12 +1208,14 @@ using Unitful
                 lh5open(fn, "r") do src
                     dest["tbl"] = src["tbl"]
                     dest["nested"] = src["nested"]
+                    dest["none"] = view(src["tbl"], falses(n))
                 end
             end
             lh5open(joinpath(dir, "copy.lh5"), "r") do lhd
                 @test lhd["tbl"].a[:] == a
                 @test lhd["tbl"].vov[:] == vov
                 @test lhd["nested"].y.vov[:] == vov
+                @test propertynames(lhd["none"]) == (:a, :b, :vov) && isempty(lhd["none"])
             end
         end
     end

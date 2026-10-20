@@ -8,7 +8,10 @@ import LegendDataTypes
 Test.@testset "Aqua tests" begin
     Aqua.test_all(
         LegendHDF5IO,
-        ambiguities = true,
+        # The cat guards of lazy tables, which only throw, are ambiguous with
+        # SparseArrays' cat methods on Julia pre-release builds. The call
+        # errors either way:
+        ambiguities = (exclude = [Base.cat],),
         # readdata/writedata/getunits/setunits! form the interface that
         # LegendDataTypes defines for LEGEND I/O packages to implement:
         piracies = (treat_as_own = [

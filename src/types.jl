@@ -1,6 +1,6 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
-export LHDataStore, LH5Array, LH5LazyTable
+export LHDataStore, LH5Array, LH5LazyTable, LH5LazyColumns
 
 """
     LH5Array{T, N} <: AbstractArray{T, N}
@@ -48,9 +48,10 @@ const LH5VoV{T} = VectorOfVectors{T, LH5Array{T, 1}}
 const LH5ArrayOfRDWaveforms{T, U, N, VVT} = 
     ArrayOfRDWaveforms{T, U, N, VVT, <:Union{LH5VoV{U}, LH5AoSA{U}}}
 const LH5VectorOfRDWaveforms{T, U} = LH5ArrayOfRDWaveforms{T, U, 1}
-# StructArrays of disk-backed columns, with tables nested one level deep.
-# StructArrays would slice and append them with the disk-backed row type:
-const LH5TableColumn = Union{LH5Array{<:Any, 1}, LH5VoV, LH5AoSA{<:Any, <:Any, 1}, LH5VectorOfRDWaveforms}
+# StructArrays of disk-backed columns, lazy tables among them, with typed
+# tables nested one level deep. StructArrays would slice and append them with
+# the disk-backed row type:
+const LH5TableColumn = Union{LH5Array{<:Any, 1}, LH5VoV, LH5AoSA{<:Any, <:Any, 1}, LH5VectorOfRDWaveforms, LH5LazyTable}
 const LH5FlatTableColumns = NamedTuple{names, <:Tuple{Vararg{LH5TableColumn}}} where names
 const LH5TableColumns = NamedTuple{names, <:Tuple{Vararg{Union{LH5TableColumn,
     StructArrays.StructVector{<:NamedTuple, <:LH5FlatTableColumns}}}}} where names
@@ -964,11 +965,12 @@ function _check_table_columns(stored, dest)
         "The columns of the table changed on disk since it was opened, reopen it to append"))
 end
 
-# The table may have gained or lost columns since dest was opened, and the
-# columns dest cached may have been appended to or replaced:
-function Base.append!(dest::LH5LazyTable, src)
-    _check_table_columns(propertynames(LH5Array(_table_store(dest))), dest)
-    _refresh_cache!(dest)
+Base.append!(dest::LH5LazyTable, src) = _append_table!(dest, src)
+# EncodedArrays appends its arrays to any vector:
+Base.append!(dest::LH5LazyTable, src::EncodedArray) = _append_table!(dest, src)
+
+function _append_table!(dest::LH5LazyTable, src)
+    _check_append_dest(dest)
     _append_impl!(_typed_table(dest), src)
     dest
 end
@@ -996,7 +998,16 @@ function _check_append_dest(dest::StructArray{<:NamedTuple})
         end
         _check_appendable(col)
     end
-    foreach(col -> col isa StructArray{<:NamedTuple} && _check_append_dest(col), cols)
+    foreach(col -> col isa Union{StructArray{<:NamedTuple}, LH5LazyTable} && _check_append_dest(col), cols)
+end
+
+# A lazy table may have gained or lost columns since it was opened, and its
+# cached columns may have been appended to or replaced, so it is checked and
+# brought up to date with the file first:
+function _check_append_dest(tbl::LH5LazyTable)
+    _check_table_columns(propertynames(LH5Array(_table_store(tbl))), tbl)
+    _refresh_cache!(tbl)
+    _check_append_dest(_typed_table(tbl))
 end
 
 # Column by column. Source columns are read before anything is written, since
@@ -1016,6 +1027,7 @@ function _append_impl!(dest::StructArray{<:NamedTuple}, src)
     dest
 end
 
+_append_impl!(dest::LH5LazyTable, src) = _append_table!(dest, src)
 _append_impl!(dest::StructArray{<:NamedTuple}, src::EncodedArray) =
     throw(ArgumentError("Cannot append an encoded array to a table"))
 

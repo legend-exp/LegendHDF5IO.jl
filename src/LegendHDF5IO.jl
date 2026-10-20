@@ -12,6 +12,7 @@ using StructArrays
 using Tables
 using Unitful
 
+import DataAPI
 import DiskArrays
 import HDF5
 using LegendDataTypes: readdata, writedata, getunits, setunits!,

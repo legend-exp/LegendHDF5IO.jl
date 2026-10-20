@@ -49,11 +49,14 @@ tables, waveforms) are represented as HDF5 groups.
 
 Tables and vectors of `RDWaveform`s round-trip through their LH5
 representation. Tables are read as [`LH5LazyTable`](@ref)s, which open a
-column when it is accessed and not before, so reading a few columns of a wide
-table costs a few reads instead of one per column. They satisfy the Tables.jl
-column interface, and treating one as an array (broadcasting, indexing,
-iteration) converts it to a `StructArray` of `NamedTuple` rows over all
-columns. Anything that satisfies the Tables.jl column interface can be written:
+column only when it is accessed, so reading a few columns of a wide table costs
+a few reads instead of one per column. They are vectors of `NamedTuple` rows
+and satisfy the Tables.jl interface, with `Tables.columns(tbl)` an ordered
+dictionary of the columns. Column-wise broadcasts, such as
+[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) over the
+table, open only the columns they use, while treating the table as an array
+opens all of them. Anything that satisfies the Tables.jl column interface can
+be written:
 
 ```julia
 using StructArrays, ArraysOfArrays, RadiationDetectorSignals
@@ -76,17 +79,20 @@ end
 ```
 
 Reading `lhd["evt"]` returns an `LH5LazyTable`; `lhd["evt"][:]`, or indexing
-with a range, reads the rows into a `StructArray`. A table handle keeps the
-column names it was opened with: columns added through other handles are not
-visible to it, and `append!` refuses when the set of column names has changed.
-Columns it has opened keep reading the data they were opened on, even after
-they were deleted elsewhere; `append!` reopens such columns and refreshes the
-others. Append through the handle: appending to a `StructArray` conversion
-of a table is only supported while none of its columns were read into memory.
+with a range, reads the rows into a `StructArray`. Iterating reads the rows in
+blocks, so loops, comprehensions and `map` neither read one row at a time nor
+the whole table at once; `filter` and `findall` scan the table this way,
+`sort` reads it first. `StructArray(tbl)` is not supported: once a column was
+read eagerly, such a `StructArray` would slice and append rows with a stale
+row type and bypass the append checks. A table handle keeps the column names
+it was opened with: columns added through other handles are not visible to it,
+and `append!` refuses when the set of column names has changed. Columns it has
+opened keep reading the data they were opened on, even after they were deleted
+elsewhere; `append!` reopens such columns and refreshes the others.
 Column-wise broadcasts, such as
-[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) over
-`StructArray(tbl)`, read only the columns they use. Lazy tables cannot be
-concatenated with `vcat`; read them first.
+[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) over the
+table, open only the columns they use. Lazy tables cannot be concatenated with
+`vcat`; read them first.
 
 Scattered reads either read the whole index span the events cover, or the
 events themselves. The thresholds for that choice,
