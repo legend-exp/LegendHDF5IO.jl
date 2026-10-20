@@ -31,6 +31,7 @@ include("geant4_hdf5.jl")
 include("histogram_io.jl")
 include("lazy_table.jl")
 include("joined_table.jl")
+include("chained_table.jl")
 include("types.jl")
 
 const _datatype_dict = Dict{String,Type}()
