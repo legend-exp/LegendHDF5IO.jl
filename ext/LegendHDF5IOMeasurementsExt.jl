@@ -31,6 +31,9 @@ function LegendHDF5IO.LH5Array(ds::HDF5.H5DataStore,
 end
 
 
+# Each read of measurements makes new ones, uncorrelated with the old:
+LegendHDF5IO._keeps_identity(::AbstractArray{<:MeasurementLike}) = true
+
 # write Measurement
 function LegendHDF5IO.create_entry(parent::LegendHDF5IO.LHDataStore, name::AbstractString,
     data::Union{MeasurementLike, AbstractArray{<:MeasurementLike}}; kwargs...)

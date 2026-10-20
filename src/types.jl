@@ -1,6 +1,6 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
-export LHDataStore, LH5Array, AbstractLH5Table, LH5LazyTable, LH5JoinedTable, LH5ChainedTable, LH5LazyColumns
+export LHDataStore, LH5FileChain, LH5Array, AbstractLH5Table, LH5LazyTable, LH5JoinedTable, LH5ChainedTable, LH5LazyColumns
 
 """
     LH5Array{T, N} <: AbstractArray{T, N}
@@ -936,6 +936,12 @@ _same_object(a, b) = _object_token(a) == _object_token(b)
 _disk_column(::Union{LH5Array, LH5VoV, LH5AoSA, LH5VectorOfRDWaveforms, LH5LazyTable}) = true
 _disk_column(A::StructArray{<:NamedTuple}) = all(_disk_column, StructArrays.components(A))
 _disk_column(::Any) = false
+
+# Columns whose elements have identities that reading them again would not
+# reproduce, such as measurements, also inside other arrays:
+_keeps_identity(::Any) = false
+_keeps_identity(A::Union{VectorOfArrays, ArrayOfSimilarArrays}) = _keeps_identity(flatview(A))
+_keeps_identity(A::StructArray) = any(_keeps_identity, StructArrays.components(A))
 
 # Columns that read from the file, which therefore must not outlive it:
 _reads_from_disk(::Any) = false

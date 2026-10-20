@@ -1529,4 +1529,260 @@ struct AboveHalf end
             end
         end
     end
+
+    @testset "file chains" begin
+        mktempdir() do dir
+            ns = (4, 0, 5, 3, 6)
+            fns = [joinpath(dir, "f$i.lh5") for i in eachindex(ns)]
+            mem = map(n -> StructArray((
+                x = rand(Float32, n),
+                v = VectorOfVectors([rand(Float32, rand(0:2)) for _ in 1:n]),
+                sub = StructArray((c = rand(n),)),
+            )), ns)
+            for (i, (fn, t)) in enumerate(zip(fns, mem))
+                lh5open(fn, "w") do lhd
+                    lhd["t"] = t
+                    lhd["arr"] = t.x
+                    lhd["u"] = StructArray((y = fill(Int32(i), length(t)),))
+                end
+            end
+            # legend-pydataobj stores cumulative lengths as uint32:
+            HDF5.h5open(fns[3], "r+") do f
+                path = "t/v/cumulative_length"
+                clen = read(f[path])
+                attrs = Dict(name => read(HDF5.attributes(f[path])[name]) for name in keys(HDF5.attributes(f[path])))
+                HDF5.delete_object(f, path)
+                f[path] = UInt32.(clen)
+                foreach(((name, value),) -> HDF5.attributes(f[path])[name] = value, attrs)
+            end
+            joined(f) = reduce(vcat, map(t -> collect(f(t)), mem))
+            xs = joined(t -> t.x)
+            ys = reduce(vcat, [fill(Int32(i), n) for (i, n) in enumerate(ns)])
+            nopen(fc) = length(fc.files)
+            lh5open(fns; max_open = 2) do fc
+                @test fc isa LH5FileChain && isopen(fc)
+                @test haskey(fc, "t") && "arr" in keys(fc)
+                t = fc["t"]
+                @test t isa LH5ChainedTable
+                # the first rows come from the first file, which is the only one opened:
+                @test t[1:3].x == xs[1:3]
+                @test collect(keys(fc.files)) == [1]
+                rows = t[:]
+                @test rows.x == xs && collect(rows.v) == joined(t -> t.v) && rows.sub.c == joined(t -> t.sub.c)
+                @test nopen(fc) <= 2
+                # columns read through files that were closed again in between:
+                @test t.x[:] == xs && collect(t.v) == joined(t -> t.v)
+                @test t.sub.c[:] == joined(t -> t.sub.c)
+                @test t[[10, 2, 10]] == rows[[10, 2, 10]]
+                @test [r.x for r in t] == xs
+                @test (@pf $x + 1).(t) == xs .+ 1
+                @test nopen(fc) <= 2
+                @test fc["arr"][:] == xs
+                @test innermerge(t, fc["u"])[:].y == ys
+                @test_throws ArgumentError fc["nope"]
+                # writing a chained table merges the files:
+                lh5open(lhd -> lhd["t"] = t, joinpath(dir, "merged.lh5"), "w")
+                @test lh5open(lhd -> lhd["t"][:], joinpath(dir, "merged.lh5")) == rows
+            end
+            # files are found again when they are reopened elsewhere:
+            fc = cd(() -> lh5open(basename.(fns[[1, 3]]); max_open = 1), dir)
+            try
+                @test fc["t"].x[:] == vcat(mem[1].x, mem[3].x)
+            finally
+                close(fc)
+            end
+            # measurements keep their identities while the chain is open, files closed in between:
+            es = [joinpath(dir, "e$i.lh5") for i in 1:2]
+            for (i, fn) in enumerate(es)
+                lh5open(lhd -> lhd["t"] = StructArray((m = measurement.(rand(2), 0.1), a = [i, i],
+                    vm = VectorOfVectors([measurement.(rand(2), 0.1), measurement.(rand(1), 0.1)]))), fn, "w")
+            end
+            lh5open(es; max_open = 1) do fc
+                t = fc["t"]
+                a, va = t[1].m, t[1].vm[1]
+                t[end]
+                b = t[1].m
+                @test Measurements.uncertainty(a - b) == 0
+                @test Measurements.uncertainty(t.m[1] - a) == 0
+                # also inside ragged columns, and read through a join:
+                vb = innermerge(t, (a = zeros(length(t)),))[1].vm[1]
+                @test Measurements.uncertainty(va - vb) == 0
+            end
+            # the inner sizes of encoded arrays are compared, field orders of datatypes are not:
+            gs2 = [joinpath(dir, "w$i.lh5") for i in 1:2]
+            codec = VarlenDiffArrayCodec()
+            trng4 = range(0.0u"μs", 1.0u"μs"; length = 4)
+            for (i, fn) in enumerate(gs2)
+                lh5open(fn, "w") do lhd
+                    lhd["t"] = StructArray((
+                        e = broadcast(|>, convert(VectorOfSimilarVectors, [rand(-5:5, 2 + i) for _ in 1:2]), codec),
+                        wf = ArrayOfRDWaveforms((fill(trng4, 2), VectorOfSimilarVectors(rand(UInt16, 4, 2)))),
+                    ))
+                end
+            end
+            HDF5.h5open(gs2[2], "r+") do f
+                HDF5.delete_attribute(f["t/wf"], "datatype")
+                HDF5.attributes(f["t/wf"])["datatype"] = "table{values,dt,t0}"
+            end
+            lh5open(gs2) do fc
+                t = fc["t"]
+                @test length(t.wf) == 4 && t.wf[3].signal == lh5open(lhd -> collect(lhd["t"].wf[1].signal), gs2[2])
+                @test_throws ArgumentError t[3:3]
+                @test_throws ArgumentError [r.e for r in t]
+            end
+            # nested tables stored under a registered datatype name:
+            LegendHDF5IO.register_datatype!("chained_nested", StructArray{<:NamedTuple{(:chained_z,)}})
+            rs = [joinpath(dir, "r$i.lh5") for i in 1:2]
+            for (i, fn) in enumerate(rs)
+                lh5open(lhd -> lhd["t"] = StructArray((a = [i], sub = StructArray((chained_z = [10i],)))), fn, "w")
+            end
+            lh5open(rs; max_open = 1) do fc
+                t = fc["t"]
+                @test t.sub.chained_z[:] == [10, 20] && t[:].sub.chained_z == [10, 20]
+            end
+            # a join of chains reads the files that hold the rows:
+            lh5open(fns; max_open = 2) do fc
+                j = innermerge(fc["t"], fc["u"])
+                @test j[1:2].y == ys[1:2] && j[1:2].x == xs[1:2]
+                @test !any(((k, path),) -> occursin("/v", path) || occursin("/sub", path), fc.checked)
+            end
+            # reading some columns of a file does not hide the others from later reads:
+            lh5open(fns; max_open = 1) do fc
+                t = fc["t"]
+                j = innermerge(t, (x = zeros(Float32, length(t)),))
+                @test j[1:2].x == zeros(Float32, 2) && j[1:2].sub.c == joined(t -> t.sub.c)[1:2]
+                @test t[1].x == xs[1] && t.x[:] == xs
+            end
+            # nested leases do not keep more than max_open files open:
+            lh5open(fns; max_open = 1) do fc
+                t = fc["t"]
+                @test t[5:5].x == xs[5:5]
+                @test nopen(fc) <= 1
+                @test collect(t.v) == joined(t -> t.v)
+                @test nopen(fc) <= 1
+            end
+            # closing a chain closes files in use when they are released:
+            fc = lh5open(fns)
+            LegendHDF5IO._with_file(fc, 1) do file
+                close(fc)
+                @test !isopen(fc) && isopen(file.lhd)
+            end
+            @test nopen(fc) == 0
+            # nested tables of other files may order their columns differently and hold more:
+            gs = [joinpath(dir, "g$i.lh5") for i in 1:2]
+            lh5open(lhd -> lhd["t"] = StructArray((a = [1, 2], sub = StructArray((c = [1, 2], d = [3, 4])))), gs[1], "w")
+            lh5open(lhd -> lhd["t"] = StructArray((a = [5], sub = StructArray((d = [7], c = [6], e = [9])))), gs[2], "w")
+            # what the first file lacks is not even opened, so it need not be readable:
+            HDF5.h5open(gs[2], "r+") do f
+                HDF5.delete_attribute(f["t/sub/e"], "datatype")
+                HDF5.attributes(f["t/sub/e"])["datatype"] = "no_such_datatype"
+            end
+            lh5open(gs) do fc
+                rows = fc["t"][:]
+                @test keys(rows.sub[3]) == (:c, :d) && rows.sub.c == [1, 2, 6]
+                @test [r.sub.d for r in fc["t"]] == [3, 4, 7]
+            end
+            # columns of a file with unequal row counts are refused, also when a join reads some only:
+            ms = [joinpath(dir, "m$i.lh5") for i in 1:2]
+            lh5open(ms[1], "w"; usechunks = true) do lhd
+                lhd["t"] = StructArray((x = [1], y = [3]))
+                append!(lhd["t"].x, [2])
+            end
+            lh5open(ms[2], "w"; usechunks = true) do lhd
+                lhd["t"] = StructArray((x = [5], y = [6]))
+                append!(lhd["t"].y, [7])
+            end
+            lh5open(ms) do fc
+                t = fc["t"]
+                @test_throws DimensionMismatch t.y
+                j = innermerge(t, (x = zeros(Int, length(t)),))
+                @test_throws DimensionMismatch j[:]
+                @test_throws DimensionMismatch j[3:3]
+                @test_throws DimensionMismatch [r.y for r in j]
+            end
+            # tables with only nested tables count their rows by a column of those:
+            ks = [joinpath(dir, "k$i.lh5") for i in 1:2]
+            lh5open(lhd -> lhd["t"] = StructArray((sub = StructArray((x = [1, 2],)),)), ks[1], "w")
+            lh5open(lhd -> lhd["t"] = StructArray((sub = StructArray((y = [0], x = [3])),)), ks[2], "w")
+            lh5open(ks) do fc
+                t = fc["t"]
+                @test length(t) == 3 && [r.sub.x for r in t] == [1, 2, 3] && t[3].sub.x == 3
+            end
+            # row counts come from the shapes of columns, which are not even opened:
+            us = [joinpath(dir, "u$i.lh5") for i in 1:2]
+            for (i, fn) in enumerate(us)
+                lh5open(lhd -> lhd["t"] = StructArray((u = fill(i, i + 1), s = [SVector(1, 2) for _ in 1:i + 1], x = collect(1:i + 1))), fn, "w")
+                HDF5.h5open(fn, "r+") do f
+                    HDF5.delete_attribute(f["t/u"], "datatype")
+                    HDF5.attributes(f["t/u"])["datatype"] = "no_such_datatype"
+                end
+            end
+            lh5open(us) do fc
+                t = fc["t"]
+                @test length(t) == 5
+                @test all(file -> all(tb -> isempty(LegendHDF5IO._table_columns(tb)), values(file.tables)), values(fc.files))
+                @test innermerge(t, (u = zeros(5),))[:].x == [1, 2, 1, 2, 3]
+            end
+            # chains of different files must agree on their columns when concatenated:
+            hs = [joinpath(dir, "h$i.lh5") for i in 1:2]
+            lh5open(lhd -> lhd["t"] = StructArray((a = [1], sub = StructArray((c = [1],)))), hs[1], "w")
+            lh5open(lhd -> lhd["t"] = StructArray((a = [2], sub = StructArray((c = [2], d = [3])))), hs[2], "w")
+            lh5open(lhd -> lhd["u"] = StructArray((a = [3], b = [4])), hs[2], "r+")
+            lh5open(hs[1:1]) do fa
+                lh5open(hs[2:2]) do fb
+                    c = vcat(fa["t"], fb["t"])
+                    @test_throws ArgumentError c[:]
+                    @test_throws ArgumentError c.sub
+                    @test_throws ArgumentError vcat(fa["t"], fb["u"])
+                end
+            end
+            # a file is checked against the first one when it is read from:
+            lh5open(fns[4], "r+") do lhd
+                delete_entry!(lhd, "t/x")
+                add_entries!(lhd, "t", StructArray((x = rand(Float64, ns[4]),)))
+            end
+            lh5open(fns[5], "r+") do lhd
+                delete_entry!(lhd, "t/v")
+            end
+            lh5open(fns; max_open = 2) do fc
+                t = fc["t"]
+                @test t[1:3].x == xs[1:3]
+                # a join of a join reads its first rows from the first file as well:
+                j2 = innermerge(innermerge(t, (tag = zeros(length(t)),)), (tag = ones(length(t)),))
+                @test j2[1:1].tag == [1.0] && j2[1:1].x == xs[1:1]
+                err = try t.x; nothing catch e e end
+                @test err isa ArgumentError && occursin(basename(fns[4]), sprint(showerror, err))
+                @test_throws ArgumentError t[:]
+                err = try t.v; nothing catch e e end
+                @test err isa ArgumentError && occursin(basename(fns[5]), sprint(showerror, err))
+                @test t.sub.c[:] == joined(t -> t.sub.c)
+            end
+            fc = lh5open(fns)
+            t = fc["t"]
+            close(fc)
+            @test !isopen(fc) && nopen(fc) == 0
+            @test_throws ArgumentError t[1:2]
+            @test_throws ArgumentError lh5open(String[])
+            # a column that is not read need not be present in every file:
+            fa, fb = joinpath(dir, "unused_a.lh5"), joinpath(dir, "unused_b.lh5")
+            lh5open(lhd -> lhd["t"] = StructArray((unused = [1, 2], wanted = [3, 4])), fa, "w")
+            lh5open(lhd -> lhd["t"] = StructArray((wanted = [5, 6],)), fb, "w")
+            lh5open([fa, fb]) do fc
+                @test fc["t"].wanted[:] == [3, 4, 5, 6]
+                @test fc["t"].wanted[2:3] == [4, 5]
+                # rows hold all columns, so reading them needs the unused one:
+                @test_throws ArgumentError fc["t"][2:3]
+                @test_throws ArgumentError fc["t"].unused[:]
+            end
+            # nor need it be stored the same way:
+            for (u1, u2) in (([1, 2], VectorOfVectors([[1], [2]])), (StructArray((x = [1, 2],)), [1, 2]),
+                    # a nested table with a column named like the data of a ragged array:
+                    (StructArray((flattened_data = [1, 2],)), VectorOfVectors([[1, 2], [3, 4]])))
+                f1, f2 = joinpath(dir, "kind_a.lh5"), joinpath(dir, "kind_b.lh5")
+                lh5open(lhd -> lhd["t"] = StructArray((unused = u1, wanted = [3, 4])), f1, "w")
+                lh5open(lhd -> lhd["t"] = StructArray((unused = u2, wanted = [5, 6])), f2, "w")
+                lh5open(fc -> @test(fc["t"].wanted[:] == [3, 4, 5, 6]), [f1, f2])
+            end
+        end
+    end
 end

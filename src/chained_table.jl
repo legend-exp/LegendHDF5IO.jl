@@ -4,8 +4,9 @@
     LH5ChainedTable <: AbstractLH5Table
 
 Tables one after the other, without reading them. `vcat` and
-`reduce(vcat, ...)` of lazy tables return one, and so does
-`ArraysOfArrays.vecflattened` of a vector of lazy tables.
+`reduce(vcat, ...)` of lazy tables return one, as do
+`ArraysOfArrays.vecflattened` of a vector of lazy tables and indexing a file
+chain with the path of a table (see [`LH5FileChain`](@ref)).
 
 Rows are read from the parts that hold them, so `first(tbl, n)` reads the
 first parts only. Accessing a column concatenates the columns of all parts
