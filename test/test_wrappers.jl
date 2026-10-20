@@ -1059,9 +1059,9 @@ struct AboveHalf end
                 @test merge((x = 1,), cols).vov === tbl.vov
                 ct = Tables.columntable(tbl)
                 @test keys(ct) == (:a, :b, :vov) && ct.a === tbl.a
-                # materializing a Tables.jl source the way a lazy table does reads it into memory:
+                # materializing a Tables.jl source the way a lazy table does wraps its columns:
                 mat = Tables.materializer(tbl)((a = tbl.a, b = tbl.b))
-                @test mat isa StructArray && mat.a isa Vector{Float32} && mat.a == a
+                @test mat isa LH5JoinedTable && mat.a === tbl.a && mat[:].a == a
             end
 
             lh5open(fn, "r") do lhd
@@ -1182,7 +1182,7 @@ struct AboveHalf end
                 @test Set(opened(tbl)) == Set([:a])
                 @test filterby(@pf $b > 0)(tbl) == tbl[:][b .> 0]
                 nt = (@pf (c = $a, d = $b)).(tbl)
-                @test nt isa StructArray && nt.c == a && nt.d == b
+                @test nt isa LH5JoinedTable && nt.c === tbl.a && nt.d == b
             end
 
             lh5open(fn, "r") do lhd
@@ -1218,6 +1218,50 @@ struct AboveHalf end
                 @test lhd["nested"].y.vov[:] == vov
                 @test propertynames(lhd["none"]) == (:a, :b, :vov) && isempty(lhd["none"])
             end
+        end
+    end
+
+    @testset "joined tables" begin
+        mktempdir() do dir
+            fn = joinpath(dir, "join.lh5")
+            n = 20
+            x = rand(Float32, n)
+            y = rand(Int32, n)
+            v = VectorOfVectors([rand(Float32, rand(0:3)) for _ in 1:n])
+            lh5open(fn, "w") do lhd
+                lhd["a"] = StructArray((x = x, v = v))
+                lhd["b"] = StructArray((y = y, x = 2 .* x))
+                lhd["c"] = StructArray((z = rand(n - 1),))
+                lhd["n"] = StructArray((y = y, sub = StructArray((w = x,))))
+            end
+            kept = lh5open(fn, "r") do lhd
+                ta, tb = lhd["a"], lhd["b"]
+                # a join wraps the columns, later tables win and the first occurrence fixes the order, as in merge:
+                j = innermerge(ta, tb)
+                @test j isa LH5JoinedTable && j isa AbstractLH5Table
+                @test propertynames(j) == (:x, :v, :y)
+                @test j.x === tb.x && j.v === ta.v
+                rows = j[:]
+                @test rows isa StructArray && rows == innermerge(ta[:], tb[:])
+                @test j[[3, 1, 3]] == rows[[3, 1, 3]]
+                @test [r.y for r in j] == y
+                @test length(j) == n && Tables.columns(j) isa LH5LazyColumns
+                @test occursin("3 columns", sprint(show, j))
+                # materializing wraps what it is given, and only columns on disk need a lazy table:
+                s = (@pf (z = $x,)).(ta)
+                @test s isa LH5JoinedTable && s.z === ta.x
+                @test Tables.materializer(ta)((p = [1, 2],)) isa StructArray
+                @test Tables.materializer(ta)(ta) === ta
+                jn = innermerge(lhd["n"], (q = x,))
+                @test jn.sub isa LH5LazyTable && jn[2].sub.w == x[2]
+                @test_throws DimensionMismatch innermerge(ta, lhd["c"])
+                @test_throws ArgumentError append!(j, rows[1:1])
+                (j, rows)
+            end
+            # the join reads from the file, the rows read from it do not:
+            j, rows = kept
+            @test rows.x == 2 .* x
+            @test_throws Exception j[1]
         end
     end
 end

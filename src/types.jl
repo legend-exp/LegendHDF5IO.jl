@@ -1,6 +1,6 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
-export LHDataStore, LH5Array, AbstractLH5Table, LH5LazyTable, LH5LazyColumns
+export LHDataStore, LH5Array, AbstractLH5Table, LH5LazyTable, LH5JoinedTable, LH5LazyColumns
 
 """
     LH5Array{T, N} <: AbstractArray{T, N}
@@ -936,6 +936,13 @@ _same_object(a, b) = _object_token(a) == _object_token(b)
 _disk_column(::Union{LH5Array, LH5VoV, LH5AoSA, LH5VectorOfRDWaveforms, LH5LazyTable}) = true
 _disk_column(A::StructArray{<:NamedTuple}) = all(_disk_column, StructArrays.components(A))
 _disk_column(::Any) = false
+
+# Columns that read from the file, which therefore must not outlive it:
+_reads_from_disk(::Any) = false
+_reads_from_disk(::Union{DiskArrays.AbstractDiskArray, AbstractLH5Table}) = true
+_reads_from_disk(A::Union{VectorOfArrays, ArrayOfSimilarArrays}) = _reads_from_disk(flatview(A))
+_reads_from_disk(A::StructArray) = any(_reads_from_disk, StructArrays.components(A))
+_reads_from_disk(A::Union{VectorOfEncodedArrays, VectorOfEncodedSimilarArrays}) = _reads_from_disk(A.encoded)
 
 # Ragged arrays and waveforms keep their element pointers and time axes in
 # memory. Bringing them up to date keeps tables built from them coherent:
