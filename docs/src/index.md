@@ -198,3 +198,18 @@ end
 
 E = HDF5.h5open(f -> readdata(f, "energy"), "data.lh5")
 ```
+
+## Migrating from 0.1
+
+Version 0.2 reads tables as [`LH5LazyTable`](@ref)s instead of TypedTables
+`Table`s with lazily read columns. Column access (`tbl.energy`) works as before,
+`tbl[:]` and indexing with a range return a `StructArray` rather than a `Table`,
+and `TypedTables.Table(tbl)` gives a `Table` of the lazy columns again.
+TypedTables is no longer a dependency. `StructArray(tbl)` is not supported, and
+lazy tables cannot be concatenated with `vcat`; read them first.
+
+`LH5Array` is a DiskArray now: broadcasts over it are lazy and read when
+collected or written, `map` is eager. [`add_entries!`](@ref) takes the file,
+the table name and the new columns; the destination argument is gone. Custom
+types register their LH5 datatype with `LegendHDF5IO.register_datatype!`
+instead of extending `datatype_to_string`.
