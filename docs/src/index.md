@@ -38,12 +38,14 @@ broadcasts over `LH5Array`s are lazy and evaluated the same way when collected
 or written. Arithmetic, `vcat`, `reverse` and `diff` return such lazy arrays
 as well, which read from the file on access and stop working once it is
 closed. `map` is eager, as in Base. Broadcasts that expand an `LH5Array` along
-a singleton dimension or add dimensions are not supported by DiskArrays yet;
-read such data with `[:]` first.
+a singleton dimension or add dimensions are not supported by DiskArrays yet,
+nor is `vcat` with an empty `LH5Array`. Read such data with `[:]` first. Empty
+`LH5Array`s also need to be read first for reductions without an `init` value,
+such as `sum` or `findall`, and for broadcasts that combine several of them.
 
 Datasets opened for writing can be modified in place within their current
-size (`E[1:10] = ...`); `append!` grows them. Nested structures (`NamedTuple`s,
-tables, waveforms) are represented as HDF5 groups.
+size (`E[1:10] = ...`), and `append!` grows them. Nested structures
+(`NamedTuple`s, tables, waveforms) are represented as HDF5 groups.
 
 ### Tables and waveforms
 
@@ -78,30 +80,77 @@ lh5open("events.lh5", "cw") do lhd
 end
 ```
 
-Reading `lhd["evt"]` returns an `LH5LazyTable`; `lhd["evt"][:]`, or indexing
-with a range, reads the rows into a `StructArray`. Iterating reads the rows in
-blocks, so loops, comprehensions and `map` neither read one row at a time nor
-the whole table at once; `filter` and `findall` scan the table this way,
-`sort` reads it first. `StructArray(tbl)` is not supported: once a column was
-read eagerly, such a `StructArray` would slice and append rows with a stale
-row type and bypass the append checks. A table handle keeps the column names
-it was opened with: columns added through other handles are not visible to it,
-and `append!` refuses when the set of column names has changed. Columns it has
-opened keep reading the data they were opened on, even after they were deleted
-elsewhere; `append!` reopens such columns and refreshes the others.
-Column-wise broadcasts, such as
-[PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl) over the
-table, open only the columns they use. Lazy tables cannot be concatenated with
-`vcat`; read them first.
+Indexing `lhd["evt"]` with `[:]` or a range reads the rows into a
+`StructArray`. Iteration reads the rows in blocks, so loops, comprehensions
+and `map` read neither one row at a time nor the whole table at once. `filter`
+and `findall` scan the table this way, while `sort` reads it first.
+`StructArray(tbl)` is not supported: once a column was read eagerly, such a
+`StructArray` would slice and append rows with a stale row type and bypass the
+append checks.
 
-Scattered reads either read the whole index span the events cover, or the
-events themselves. The thresholds for that choice,
+A table handle keeps the column names it was opened with: columns added
+through other handles are not visible to it, and `append!` refuses when the
+set of column names has changed. Columns it has opened keep reading the data
+they were opened on, even after they were deleted or replaced elsewhere.
+`append!` reopens replaced columns and refreshes the others.
+
+Scattered reads either read the whole index span the events cover, or only
+the events themselves. The thresholds for that choice,
 [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) and
 [`LegendHDF5IO.scatter_bulk_max_waste`](@ref), depend on the file system by
 default: 1 MiB and a factor of 4 on local storage, 8 MiB and 16 on network
 file systems such as GPFS, NFS or Lustre, which pay per read operation. The
 file system is recognized from the mount table on Linux. Set the thresholds
 to override the defaults.
+
+### Joining and concatenating tables
+
+`innermerge` from PropertyFunctions joins lazy tables column by column, and
+`vcat` concatenates them row by row, both without reading anything:
+
+```julia
+using PropertyFunctions
+
+lh5open("events.lh5") do lhd
+    evt = lhd["evt"]
+    twice = vcat(evt, evt)                                     # an LH5ChainedTable
+    tagged = innermerge(evt, (tag = rand(Bool, length(evt)),)) # an LH5JoinedTable
+    tagged[1:10]                                               # reads ten rows
+end
+```
+
+A joined table takes each column from the last table that has it, as `merge`
+does, and opens it when it is used. A chained table reads rows from the parts
+that hold them and concatenates columns lazily. `ArraysOfArrays.vecflattened`
+chains a vector of tables as well. `Tables.materializer` of a lazy table,
+which named PropertyFunctions selections use, wraps the given columns without
+reading them.
+
+`append!` refuses joined and chained tables. Writing to a column of a joined
+table writes to the table it comes from, while the columns of a chained table
+are read-only. Concatenating lazy tables with other arrays, and `hcat`, are
+refused.
+
+### Reading many files
+
+`lh5open` of a vector of file names opens files of the same structure as one
+[`LH5FileChain`](@ref), similar to ROOT's `TChain`. Indexing it with a path
+chains the table or array there over all files:
+
+```julia
+lh5open(["run1.lh5", "run2.lh5", "run3.lh5"]) do files
+    evt = files["evt"]  # an LH5ChainedTable over the three files
+    evt[1:100]          # reads from the first file only
+    sum(evt.energy)     # reads the column from every file
+end
+```
+
+Files are opened when they are read from, and at most `max_open` of them (64
+by default) stay open. The first file defines the structure: column names,
+datatypes, units, element types and inner sizes. Another file is checked
+against it when a column is first read from it, so the files need to agree
+only on what is read. A difference throws an `ArgumentError` that names the
+file. Objects from the chain stop working when it is closed.
 
 ### Appending and compression
 
@@ -205,11 +254,12 @@ Version 0.2 reads tables as [`LH5LazyTable`](@ref)s instead of TypedTables
 `Table`s with lazily read columns. Column access (`tbl.energy`) works as before,
 `tbl[:]` and indexing with a range return a `StructArray` rather than a `Table`,
 and `TypedTables.Table(tbl)` gives a `Table` of the lazy columns again.
-TypedTables is no longer a dependency. `StructArray(tbl)` is not supported, and
-lazy tables cannot be concatenated with `vcat`; read them first.
+TypedTables is no longer a dependency, and `StructArray(tbl)` is not supported.
+Joins with `innermerge` and named PropertyFunctions selections return lazy
+tables, as before.
 
-`LH5Array` is a DiskArray now: broadcasts over it are lazy and read when
-collected or written, `map` is eager. [`add_entries!`](@ref) takes the file,
-the table name and the new columns; the destination argument is gone. Custom
-types register their LH5 datatype with `LegendHDF5IO.register_datatype!`
-instead of extending `datatype_to_string`.
+`LH5Array` is now a DiskArray: broadcasts over it are lazy and read when
+collected or written, while `map` is eager. [`add_entries!`](@ref) takes the
+file, the table name and the new columns, without the destination argument.
+Custom types register their LH5 datatype with
+`LegendHDF5IO.register_datatype!` instead of extending `datatype_to_string`.
