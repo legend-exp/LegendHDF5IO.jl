@@ -984,6 +984,7 @@ struct AboveHalf end
                 @test !isempty(tbl)
                 @test firstindex(tbl) == 1 && lastindex(tbl) == n
                 @test tbl isa AbstractVector{NamedTuple}
+                @test LH5LazyTable <: AbstractLH5Table <: AbstractVector{NamedTuple}
                 @test eltype(tbl) === NamedTuple
                 @test axes(tbl) == (1:n,)
                 @test IndexStyle(tbl) === IndexLinear()
