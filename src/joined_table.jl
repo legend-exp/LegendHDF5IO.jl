@@ -40,6 +40,11 @@ _part_column(cols::NamedTuple, name::Symbol) = getfield(cols, name)
 _part_lengths(tbl::AbstractLH5Table) = [length(tbl)]
 _part_lengths(cols::NamedTuple) = Int[length(col) for col in values(cols)]
 
+# Lazy tables and NamedTuples of columns join as they are, other tables with their columns:
+_join_part(tbl::AbstractLH5Table) = tbl
+_join_part(cols::NamedTuple) = cols
+_join_part(tbl) = Tables.columntable(tbl)
+
 _join_parts(tbl::LH5JoinedTable) = getfield(tbl, :parts)
 _table_colnames(tbl::LH5JoinedTable) = getfield(tbl, :colnames)
 
@@ -49,22 +54,47 @@ function _column(tbl::LH5JoinedTable, name::Symbol)
     _part_column(_join_parts(tbl)[getfield(tbl, :owners)[i]], name)
 end
 
+# The tables that provide columns must still agree in length:
 function Base.length(tbl::LH5JoinedTable)
-    for part in _join_parts(tbl)
-        part isa AbstractLH5Table && return length(part)
-        isempty(part) || return length(first(part))
-    end
-    0
+    parts, owners, names = _join_parts(tbl), getfield(tbl, :owners), _table_colnames(tbl)
+    lengths = unique(mapreduce(k -> _owned_lengths(parts[k], names[owners .== k]), vcat, unique(owners); init = Int[]))
+    length(lengths) <= 1 || throw(DimensionMismatch(
+        "The tables of the join differ in length: $(join(lengths, ", "))"))
+    isempty(lengths) ? 0 : only(lengths)
 end
 
-# Each part reads the rows of its columns, which for a chained table touches
-# only the files that hold them:
+_owned_lengths(tbl::AbstractLH5Table, ::Any) = [length(tbl)]
+_owned_lengths(cols::NamedTuple, names) = [length(getfield(cols, name)) for name in names]
+
+# Each part reads the rows of the columns it provides, as they are now, which
+# for a chained table touches only the files that hold them. The parts must
+# still agree in length, or rows of different events would pair up:
 function _getindex_rows(tbl::LH5JoinedTable, idxs)
+    length(tbl)
     sel = idxs isa AbstractVector{Bool} ? _materialize(idxs) : idxs
-    parts, owners = _join_parts(tbl), getfield(tbl, :owners)
-    rows = Dict(k => _join_rows(parts[k], sel) for k in unique(owners))
-    names = (_table_colnames(tbl)...,)
-    StructArray(NamedTuple{names}(map((name, k) -> getproperty(rows[k], name), names, Tuple(owners))))
+    parts, owners, names = _join_parts(tbl), getfield(tbl, :owners), _table_colnames(tbl)
+    rows = Dict(k => _join_rows(_select(parts[k], names[owners .== k]), sel) for k in unique(owners))
+    StructArray(NamedTuple{(names...,)}(map((name, k) -> getproperty(rows[k], name), (names...,), Tuple(owners))))
+end
+
+# A part with only some of its columns, each of which must have the rows of the part:
+function _select(tbl::AbstractLH5Table, names)
+    issetequal(names, _table_colnames(tbl)) && return tbl
+    cols = NamedTuple{(names...,)}(map(name -> getproperty(tbl, name), (names...,)))
+    n = length(tbl)
+    foreach(pairs(cols)) do (name, col)
+        last(size(col)) == n || throw(DimensionMismatch("Column $name has $(last(size(col))) rows, its table has $n"))
+    end
+    LH5JoinedTable(cols)
+end
+_select(cols::NamedTuple, names) = NamedTuple{(names...,)}(cols)
+
+# A join selects from its parts, so that their columns are not opened:
+function _select(tbl::LH5JoinedTable, names)
+    issetequal(names, _table_colnames(tbl)) && return tbl
+    parts, owners, colnames = _join_parts(tbl), getfield(tbl, :owners), _table_colnames(tbl)
+    selected = [k => colnames[(owners .== k) .& in.(colnames, Ref(names))] for k in unique(owners)]
+    LH5JoinedTable((_select(parts[k], ks) for (k, ks) in selected if !isempty(ks))...)
 end
 
 _join_rows(tbl::AbstractLH5Table, idxs) = tbl[idxs]

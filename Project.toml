@@ -21,9 +21,11 @@ Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
 [weakdeps]
 Measurements = "eff96d63-e80a-5855-80a2-b1b0885c5ab7"
+PropertyFunctions = "09e99361-2bb8-48a2-a80f-de58f0739eb4"
 
 [extensions]
 LegendHDF5IOMeasurementsExt = "Measurements"
+LegendHDF5IOPropertyFunctionsExt = "PropertyFunctions"
 
 [compat]
 ArraysOfArrays = "1.4.1"
@@ -36,6 +38,7 @@ LegendDataTypes = "0.1.17"
 Measurements = "2.5"
 PrecompileTools = "1.2"
 Preferences = "1"
+PropertyFunctions = "0.2.4, 0.3"
 RadiationDetectorSignals = "0.3.12"
 StaticArrays = "1"
 StatsBase = "0.33.17, 0.34"

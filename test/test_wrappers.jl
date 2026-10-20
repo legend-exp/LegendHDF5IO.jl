@@ -1262,6 +1262,61 @@ struct AboveHalf end
             j, rows = kept
             @test rows.x == 2 .* x
             @test_throws Exception j[1]
+
+            opened(tbl) = Set(keys(LegendHDF5IO._table_columns(tbl)))
+            # a column replaced in a join is not read, so it need not be readable:
+            fn_bad = joinpath(dir, "replaced.lh5")
+            lh5open(lhd -> lhd["a"] = StructArray((x = x, old = y)), fn_bad, "w")
+            HDF5.h5open(fn_bad, "r+") do f
+                HDF5.delete_attribute(f["a/old"], "datatype")
+                HDF5.attributes(f["a/old"])["datatype"] = "no_such_datatype"
+            end
+            lh5open(fn_bad, "r") do lhd
+                j = innermerge(lhd["a"], (old = 2 .* y,))
+                @test j[:].old == 2 .* y && j[:].x == x && [r.old for r in j] == 2 .* y
+            end
+            # rows of a join read the current columns of its tables:
+            lh5open(joinpath(dir, "joingrow.lh5"), "w"; usechunks = true) do lhd
+                lhd["a"] = StructArray((x = [1, 2], y = [3, 4]))
+                lhd["b"] = StructArray((x = [5, 6],))
+                ta, tb = lhd["a"], lhd["b"]
+                j = innermerge(ta, tb)
+                @test j[1:2].y == [3, 4]
+                delete_entry!(lhd, "a/y")
+                add_entries!(lhd, "a", StructArray((y = [30, 40],)))
+                append!(ta, StructArray((x = [7], y = [50])))
+                append!(tb, StructArray((x = [8],)))
+                @test j.y[:] == [30, 40, 50] && j[:].y == [30, 40, 50] && j[:].x == [5, 6, 8]
+            end
+            # the length of a join is the current length of the tables that provide its columns:
+            lh5open(joinpath(dir, "joinlen.lh5"), "w"; usechunks = true) do lhd
+                lhd["a"] = StructArray((x = [1, 2],))
+                lhd["b"] = StructArray((x = [5, 6],))
+                lhd["c"] = StructArray((y = [7, 8, 11],))
+                ta, tb, tc = lhd["a"], lhd["b"], lhd["c"]
+                j = innermerge(ta, tb)
+                append!(tb, StructArray((x = [9],)))
+                @test length(j) == 3 && [r.x for r in j] == [5, 6, 9] && sum(r -> r.x, j) == 20
+                k = innermerge(tb, tc)
+                append!(tb, StructArray((x = [10],)))
+                @test_throws DimensionMismatch length(k)
+                @test_throws DimensionMismatch k[:]
+                @test_throws DimensionMismatch k[2:3]
+                @test_throws DimensionMismatch k[1]
+                @test_throws DimensionMismatch k[[1, 3]]
+            end
+            lh5open(fn, "r") do lhd
+                # innermerge opens the columns of the joined tables when they are used:
+                ta, tb = lhd["a"], lhd["b"]
+                j = innermerge(ta, tb)
+                @test length(opened(ta)) <= 1 && length(opened(tb)) <= 1
+                @test j.y[:] == y && j.x[:] == 2 .* x
+                @test :v ∉ opened(ta)
+                @test j[:] == innermerge(ta[:], tb[:])
+                # other tables join with their columns:
+                @test innermerge(ta, (w = y,)).w === y
+                @test innermerge(ta, StructArray((w = y,))).w === y
+            end
         end
     end
 end
