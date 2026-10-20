@@ -3,7 +3,8 @@
 """
     AbstractLH5Table <: AbstractVector{NamedTuple}
 
-Supertype of the lazy tables of LH5 data: [`LH5LazyTable`](@ref).
+Supertype of the lazy tables of LH5 data: [`LH5LazyTable`](@ref) and
+[`LH5JoinedTable`](@ref).
 
 A lazy table is a vector of `NamedTuple` rows whose column names are known,
 while their element types are only known once a column is opened. Accessing
@@ -309,9 +310,15 @@ Tables.columnaccess(::Type{<:LH5LazyTableView}) = true
 Tables.columns(v::LH5LazyTableView) = parent(v)[only(parentindices(v))]
 # The column types are only known once the columns are opened:
 Tables.schema(::Union{AbstractLH5Table, LH5LazyColumns}) = nothing
-# A lazy table cannot be built from another source, so sinks get the rows in memory:
-Tables.materializer(::Union{AbstractLH5Table, LH5LazyColumns}) = _in_memory_table
-_in_memory_table(x) = _materialize(StructArray(Tables.columntable(x)))
+# Like those of StructArrays and TypedTables, the materializer wraps the
+# columns it is given. Columns that read from disk go into a lazy table, which
+# slices them safely:
+Tables.materializer(::Union{AbstractLH5Table, LH5LazyColumns}) = _wrap_columns
+_wrap_columns(tbl::AbstractLH5Table) = tbl
+function _wrap_columns(x)
+    cols = Tables.columntable(x)
+    any(_reads_from_disk, cols) ? LH5JoinedTable(cols) : StructArray(cols)
+end
 DataAPI.nrow(tbl::AbstractLH5Table) = length(tbl)
 DataAPI.ncol(tbl::AbstractLH5Table) = length(_table_colnames(tbl))
 

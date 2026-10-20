@@ -1070,9 +1070,9 @@ struct AboveHalf end
                 @test merge((x = 1,), cols).vov === tbl.vov
                 ct = Tables.columntable(tbl)
                 @test keys(ct) == (:a, :b, :vov) && ct.a === tbl.a
-                # materializing a Tables.jl source the way a lazy table does reads it into memory:
+                # materializing a Tables.jl source the way a lazy table does wraps its columns:
                 mat = Tables.materializer(tbl)((a = tbl.a, b = tbl.b))
-                @test mat isa StructArray && mat.a isa Vector{Float32} && mat.a == a
+                @test mat isa LH5JoinedTable && mat.a === tbl.a && mat[:].a == a
             end
 
             lh5open(fn, "r") do lhd
@@ -1193,7 +1193,7 @@ struct AboveHalf end
                 @test Set(opened(tbl)) == Set([:a])
                 @test filterby(@pf $b > 0)(tbl) == tbl[:][b .> 0]
                 nt = (@pf (c = $a, d = $b)).(tbl)
-                @test nt isa StructArray && nt.c == a && nt.d == b
+                @test nt isa LH5JoinedTable && nt.c === tbl.a && nt.d == b
             end
 
             lh5open(fn, "r") do lhd
@@ -1228,6 +1228,105 @@ struct AboveHalf end
                 @test lhd["tbl"].vov[:] == vov
                 @test lhd["nested"].y.vov[:] == vov
                 @test propertynames(lhd["none"]) == (:a, :b, :vov) && isempty(lhd["none"])
+            end
+        end
+    end
+
+    @testset "joined tables" begin
+        mktempdir() do dir
+            fn = joinpath(dir, "join.lh5")
+            n = 20
+            x = rand(Float32, n)
+            y = rand(Int32, n)
+            v = VectorOfVectors([rand(Float32, rand(0:3)) for _ in 1:n])
+            lh5open(fn, "w") do lhd
+                lhd["a"] = StructArray((x = x, v = v))
+                lhd["b"] = StructArray((y = y, x = 2 .* x))
+                lhd["c"] = StructArray((z = rand(n - 1),))
+                lhd["n"] = StructArray((y = y, sub = StructArray((w = x,))))
+            end
+            kept = lh5open(fn, "r") do lhd
+                ta, tb = lhd["a"], lhd["b"]
+                # a join wraps the columns, later tables win and the first occurrence fixes the order, as in merge:
+                j = innermerge(ta, tb)
+                @test j isa LH5JoinedTable && j isa AbstractLH5Table
+                @test propertynames(j) == (:x, :v, :y)
+                @test j.x === tb.x && j.v === ta.v
+                rows = j[:]
+                @test rows isa StructArray && rows == innermerge(ta[:], tb[:])
+                @test j[[3, 1, 3]] == rows[[3, 1, 3]]
+                @test [r.y for r in j] == y
+                @test length(j) == n && Tables.columns(j) isa LH5LazyColumns
+                @test occursin("3 columns", sprint(show, j))
+                # materializing wraps what it is given, and only columns on disk need a lazy table:
+                s = (@pf (z = $x,)).(ta)
+                @test s isa LH5JoinedTable && s.z === ta.x
+                @test Tables.materializer(ta)((p = [1, 2],)) isa StructArray
+                @test Tables.materializer(ta)(ta) === ta
+                jn = innermerge(lhd["n"], (q = x,))
+                @test jn.sub isa LH5LazyTable && jn[2].sub.w == x[2]
+                @test_throws DimensionMismatch innermerge(ta, lhd["c"])
+                @test_throws ArgumentError append!(j, rows[1:1])
+                (j, rows)
+            end
+            # the join reads from the file, the rows read from it do not:
+            j, rows = kept
+            @test rows.x == 2 .* x
+            @test_throws Exception j[1]
+
+            opened(tbl) = Set(keys(LegendHDF5IO._table_columns(tbl)))
+            # a column replaced in a join is not read, so it need not be readable:
+            fn_bad = joinpath(dir, "replaced.lh5")
+            lh5open(lhd -> lhd["a"] = StructArray((x = x, old = y)), fn_bad, "w")
+            HDF5.h5open(fn_bad, "r+") do f
+                HDF5.delete_attribute(f["a/old"], "datatype")
+                HDF5.attributes(f["a/old"])["datatype"] = "no_such_datatype"
+            end
+            lh5open(fn_bad, "r") do lhd
+                j = innermerge(lhd["a"], (old = 2 .* y,))
+                @test j[:].old == 2 .* y && j[:].x == x && [r.old for r in j] == 2 .* y
+            end
+            # rows of a join read the current columns of its tables:
+            lh5open(joinpath(dir, "joingrow.lh5"), "w"; usechunks = true) do lhd
+                lhd["a"] = StructArray((x = [1, 2], y = [3, 4]))
+                lhd["b"] = StructArray((x = [5, 6],))
+                ta, tb = lhd["a"], lhd["b"]
+                j = innermerge(ta, tb)
+                @test j[1:2].y == [3, 4]
+                delete_entry!(lhd, "a/y")
+                add_entries!(lhd, "a", StructArray((y = [30, 40],)))
+                append!(ta, StructArray((x = [7], y = [50])))
+                append!(tb, StructArray((x = [8],)))
+                @test j.y[:] == [30, 40, 50] && j[:].y == [30, 40, 50] && j[:].x == [5, 6, 8]
+            end
+            # the length of a join is the current length of the tables that provide its columns:
+            lh5open(joinpath(dir, "joinlen.lh5"), "w"; usechunks = true) do lhd
+                lhd["a"] = StructArray((x = [1, 2],))
+                lhd["b"] = StructArray((x = [5, 6],))
+                lhd["c"] = StructArray((y = [7, 8, 11],))
+                ta, tb, tc = lhd["a"], lhd["b"], lhd["c"]
+                j = innermerge(ta, tb)
+                append!(tb, StructArray((x = [9],)))
+                @test length(j) == 3 && [r.x for r in j] == [5, 6, 9] && sum(r -> r.x, j) == 20
+                k = innermerge(tb, tc)
+                append!(tb, StructArray((x = [10],)))
+                @test_throws DimensionMismatch length(k)
+                @test_throws DimensionMismatch k[:]
+                @test_throws DimensionMismatch k[2:3]
+                @test_throws DimensionMismatch k[1]
+                @test_throws DimensionMismatch k[[1, 3]]
+            end
+            lh5open(fn, "r") do lhd
+                # innermerge opens the columns of the joined tables when they are used:
+                ta, tb = lhd["a"], lhd["b"]
+                j = innermerge(ta, tb)
+                @test length(opened(ta)) <= 1 && length(opened(tb)) <= 1
+                @test j.y[:] == y && j.x[:] == 2 .* x
+                @test :v ∉ opened(ta)
+                @test j[:] == innermerge(ta[:], tb[:])
+                # other tables join with their columns:
+                @test innermerge(ta, (w = y,)).w === y
+                @test innermerge(ta, StructArray((w = y,))).w === y
             end
         end
     end
