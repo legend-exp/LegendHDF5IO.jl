@@ -1221,9 +1221,15 @@ struct AboveHalf end
                 sn = (@pf (bb = $y.b, xa = $x.a)).(nested)
                 @test eltype(sn) == @NamedTuple{bb::Int32, xa::Float32} && sn[:] == StructArray((bb = b, xa = a))
                 @test sn.bb === nested.y.b
+                @test Set(opened(nested.y)) == Set([:b])
                 sw = (@pf (; $y)).(nested)
                 @test eltype(sw) <: NamedTuple{(:y,)} && sw[1:2].y == StructArray((b = b[1:2], vov = vov[1:2]))
                 @test @inferred(sw[1:2]).y isa StructArray
+                # selections into the nested columns of a selection, through a join and through a chain:
+                sq = (@pf (bb = $y.b, qq = $q)).(innermerge(sw, (q = collect(1:n),)))
+                @test eltype(sq) == @NamedTuple{bb::Int32, qq::Int} && sq[:] == StructArray((bb = b, qq = collect(1:n)))
+                sc = (@pf (bb = $y.b,)).(vcat(sw, sw))
+                @test eltype(sc) == @NamedTuple{bb::Int32} && sc[:].bb == vcat(b, b) && @inferred(sc[n:n + 1]).bb == b[[n, 1]]
             end
 
             lh5open(fn, "r") do lhd
@@ -1414,6 +1420,9 @@ struct AboveHalf end
                 @test c.wf[10].signal == mem[3].wf[3].signal
                 @test c.sub isa LH5ChainedTable && c.sub.c[:] == joined(t -> t.sub.c)
                 @test [r.b for r in c] == bs
+                # paths into columns that are not tables, like waveforms, take the column whole:
+                sw = (@pf (sig = $wf.signal, b = $b)).(c)
+                @test sw[10].sig == mem[3].wf[3].signal && sw[1:2].sig == [w.signal for w in mem[1].wf[1:2]]
                 @test (@pf $x * 2).(c) == 2 .* xs
                 @test filterby(@pf $b > 0)(c) == rows[bs .> 0]
                 @test Tables.columns(c) isa LH5LazyColumns
@@ -1721,10 +1730,6 @@ struct AboveHalf end
             # a selection over a file chain opens the first file only, and fixes the row type there:
             lh5open(fns; max_open = 1) do fc
                 s = (@pf (xx = $x, c = $sub.c, v = $v)).(fc["t"])
-                # iteration infers its state, block after block:
-                r1 = @inferred Nothing iterate(s)
-                r2 = @inferred Nothing iterate(s, last(r1))
-                @test first(r1).xx == xs[1] && first(r2).xx == xs[2]
                 @test collect(keys(fc.files)) == [1] && isempty(fc.checked)
                 @test eltype(s) == @NamedTuple{xx::Float32, c::Float64, v::eltype(mem[1].v)}
                 cs_all = joined(t -> t.sub.c)
@@ -1736,11 +1741,46 @@ struct AboveHalf end
                 @test Tables.schema(s).names == (:xx, :c, :v)
                 @test first(s, 2).xx == xs[1:2] && first(s).xx == xs[1]
                 @test nopen(fc) <= 1
+                # iteration infers its state, block after block:
+                r1 = @inferred Nothing iterate(s)
+                r2 = @inferred Nothing iterate(s, last(r1))
+                @test first(r1).xx == xs[1] && first(r2).xx == xs[2]
+            end
+            # a selection over a chain of selections opens the first file only, too:
+            lh5open(fns; max_open = 1) do fc
+                s = (@pf (; $x, $sub)).(fc["t"])
+                s2 = (@pf (c = $sub.c,)).(vcat(s, s))
+                @test collect(keys(fc.files)) == [1] && isempty(fc.checked)
+                @test s2[:].c == repeat(joined(t -> t.sub.c), 2)
             end
             # an empty first file still gives the types:
             lh5open(fns[[2, 1]]) do fc
                 s = (@pf (; $x)).(fc["t"])
                 @test eltype(s) == @NamedTuple{x::Float32} && s[:].x == mem[1].x && isempty(s[1:0])
+            end
+            # a nested column selected on its own must still have the rows of the table:
+            gs = [joinpath(dir, "grown$i.lh5") for i in 1:2]
+            for (i, fn) in enumerate(gs)
+                lh5open(fn, "w"; usechunks = true) do lhd
+                    lhd["t"] = StructArray((a = [i, i], sub = StructArray((c = [1, 2], d = [1, 2]))))
+                    append!(lhd["t"].sub.d, [3])
+                end
+            end
+            lh5open(gs) do fc
+                @test_throws DimensionMismatch (@pf (dd = $sub.d,)).(fc["t"])
+            end
+            # nested paths read only the columns they name, in every file:
+            ps = [joinpath(dir, "paths$i.lh5") for i in 1:2]
+            for (i, fn) in enumerate(ps)
+                lh5open(lhd -> lhd["t"] = StructArray((a = [i], sub = StructArray((c = [10i], d = [100i])))), fn, "w")
+            end
+            lh5open(ps; max_open = 1) do fc
+                s = (@pf (c = $sub.c, a = $a)).(fc["t"])
+                @test eltype(s) == @NamedTuple{c::Int, a::Int} && s[:] == StructArray((c = [10, 20], a = [1, 2]))
+                @test "t/sub/d" ∉ keys(fc.structures) && !any(((k, path),) -> endswith(path, "/d"), fc.checked)
+                @test [r.c for r in s] == [10, 20] && s[2:2].a == [2]
+                w = (@pf (; $sub)).(fc["t"])
+                @test w[:].sub == StructArray((c = [10, 20], d = [100, 200]))
             end
             # nested tables stored under a registered datatype name:
             LegendHDF5IO.register_datatype!("chained_nested", StructArray{<:NamedTuple{(:chained_z,)}})

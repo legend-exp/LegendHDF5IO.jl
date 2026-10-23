@@ -123,11 +123,11 @@ lh5open("events.lh5") do lhd
 end
 ```
 
-Nested paths such as `$geds.energy` select from nested tables. The row type
-and the types of the columns of a block of rows come from the first file, so
-rows read with a range or an index vector, iteration and `filterby` have
-inferable types. The columns of a typed table, `sel.e`, are the lazy columns
-of the table it selects from.
+Nested paths such as `$geds.energy` select from nested tables, and only the
+selected columns are read. The row type and the types of the columns of a
+block of rows come from the first file, so rows read with a range or an index
+vector, iteration and `filterby` have inferable types. The columns of a typed
+table, `sel.e`, are the lazy columns of the table it selects from.
 
 ### Joining and concatenating tables
 

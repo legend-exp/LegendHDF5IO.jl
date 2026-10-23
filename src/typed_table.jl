@@ -31,9 +31,19 @@ column, as a typed table with the columns named `names`.
 """
 function LH5TypedTable(tbl::AbstractLH5Table, names::NTuple{N, Symbol}, paths::NTuple{N, Tuple{Vararg{Symbol}}}) where {N}
     allunique(names) || throw(ArgumentError("Selected column names are not unique: $(join(names, ", "))"))
-    projected = _select(tbl, unique(map(first, paths)))
+    projected = _select(tbl, _selection_tree(paths))
     block = _block_columns(_pick_columns(projected[1:0], names, paths))
     LH5TypedTable{eltype(block), typeof(block), typeof(projected)}(projected, collect(paths))
+end
+
+# The columns at `paths` as a name tree (see `_select`): a name for a column
+# or a whole nested table, a name with a subtree for part of a nested table:
+function _selection_tree(paths)
+    heads = unique(map(first, paths))
+    Tuple(map(heads) do head
+        tails = [Base.tail(path) for path in paths if first(path) == head]
+        any(isempty, tails) ? head : head => _selection_tree(tails)
+    end)
 end
 
 # A selection of a typed table selects from the table it was made from:
@@ -108,21 +118,46 @@ _convert_column(::Type{T}, col::VectorOfVectors) where {T<:VectorOfVectors} = co
 _convert_column(::Type{T}, col::ArrayOfSimilarArrays) where {T<:ArrayOfSimilarArrays} = col isa T ? col :
     ArrayOfSimilarArrays{eltype(fieldtype(T, :data)), ndims(eltype(T))}(_convert_column(fieldtype(T, :data), flatview(col)))
 
-# A join selects from the table a typed table was made from, with the block
-# types of the columns it takes:
-function _select(tbl::LH5TypedTable{R, B}, names) where {R, B}
-    issetequal(names, fieldnames(R)) && return tbl
-    selected = (names...,)
-    paths = map(name -> _column_path(tbl, name), selected)
-    projected = _select(_typed_parent(tbl), unique(map(first, paths)))
-    block = _block_type(B, selected)
+# A join or a chain selects from the table a typed table was made from, with
+# the block types of the columns it takes:
+function _select(tbl::LH5TypedTable{R, B}, tree) where {R, B}
+    _selects_all(tree, fieldnames(R)) && return tbl
+    entries = (tree...,)
+    paths = map(entry -> _column_path(tbl, _tree_name(entry)), entries)
+    leaves = [(path..., leaf...) for (path, entry) in zip(paths, entries) for leaf in _entry_leaves(entry)]
+    projected = _select(_typed_parent(tbl), _selection_tree(leaves))
+    block = _block_type(B, entries)
     LH5TypedTable{eltype(block), block, typeof(projected)}(projected, collect(paths))
 end
 
-# The type of the blocks of some of the columns of blocks of type `B`:
-_block_type(::Type{StructArray{R, 1, C, I}}, names::Tuple) where {R, C, I} = StructArray{
-    NamedTuple{names, Tuple{map(name -> fieldtype(R, name), names)...}}, 1,
-    NamedTuple{names, Tuple{map(name -> fieldtype(C, name), names)...}}, I}
+# The paths below an entry of a selection: none for a column or a whole
+# nested table, the leaves of the subtree for part of a nested table:
+_entry_leaves(::Symbol) = [()]
+_entry_leaves(entry::Pair) = _tree_leaves(last(entry))
+
+# The type of the blocks of a selection from blocks of type `B`:
+function _block_type(::Type{B}, tree) where {B<:StructArray}
+    entries = (tree...,)
+    cols = map(entry -> entry isa Pair ? _block_type(_block_column_type(B, first(entry)), last(entry)) :
+        _block_column_type(B, entry), entries)
+    names = map(_tree_name, entries)
+    StructArray{NamedTuple{names, Tuple{map(eltype, cols)...}}, 1, NamedTuple{names, Tuple{cols...}}, _block_index_type(B)}
+end
+
+_block_column_type(::Type{StructArray{R, 1, C, I}}, name::Symbol) where {R, C, I} = fieldtype(C, name)
+_block_index_type(::Type{StructArray{R, 1, C, I}}) where {R, C, I} = I
+
+# The nested tables and the name tree of a typed table come from its block
+# type, so looking at them opens no column:
+_is_subtable(::LH5TypedTable{R, B}, name::Symbol) where {R, B} = _block_column_type(B, name) <: _MemoryTable
+_name_tree(::LH5TypedTable{R, B}, tree) where {R, B} = _type_tree(B, tree)
+
+_type_tree(::Type{B}, tree) where {B<:StructArray} = Tuple(map((tree...,)) do entry
+    name = _tree_name(entry)
+    T = _block_column_type(B, name)
+    T <: _MemoryTable || return name
+    name => _type_tree(T, entry isa Pair ? last(entry) : fieldnames(fieldtype(T, :components)))
+end)
 
 Tables.schema(::LH5TypedTable{R}) where {R} = Tables.Schema(fieldnames(R), fieldtypes(R))
 Tables.columntype(::LH5TypedTable{R}, name::Symbol) where {R} = fieldtype(R, name)

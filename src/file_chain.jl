@@ -22,7 +22,7 @@ mutable struct LH5FileChain
     files::Dict{Int, Any}
     recent::Vector{Int}
     structures::Dict{String, Any}
-    trees::Dict{Tuple{String, Vector{Symbol}}, Any}
+    trees::Dict{Tuple{String, Tuple}, Any}
     kept::Dict{Tuple{Int, String}, Any}
     checked::Set{Tuple{Int, String}}
     lock::ReentrantLock
@@ -47,7 +47,7 @@ function lh5open(filenames::AbstractVector{<:AbstractString}; max_open::Integer 
     max_open >= 1 || throw(ArgumentError("max_open must be at least 1"))
     # Files are reopened later, maybe from another working directory:
     LH5FileChain(abspath.(filenames), max_open, Dict{Int, Any}(), Int[],
-        Dict{String, Any}(), Dict{Tuple{String, Vector{Symbol}}, Any}(), Dict{Tuple{Int, String}, Any}(),
+        Dict{String, Any}(), Dict{Tuple{String, Tuple}, Any}(), Dict{Tuple{Int, String}, Any}(),
         Set{Tuple{Int, String}}(),
         ReentrantLock(), true)
 end
@@ -248,25 +248,27 @@ end
 DiskArrays.writeblock!(::LH5PartArray, ::Any, ::Vararg{AbstractUnitRange}) =
     throw(ArgumentError("The arrays of a file chain are read-only"))
 
-# The table at `path` in file `k`, with the column names of the first file,
-# or some of them. Rows are counted by all of them:
+# The table at `path` in file `k`, with the columns of the first file, or a
+# selection of them as a name tree (see `_select`). Rows are counted by all
+# of them:
 struct _FileTablePart
     chain::LH5FileChain
     k::Int
     path::String
-    names::Vector{Symbol}
+    tree::Tuple
     allnames::Vector{Symbol}
 end
 
 _FileTablePart(chain::LH5FileChain, k::Integer, path::AbstractString, names::Vector{Symbol}) =
-    _FileTablePart(chain, k, path, names, names)
+    _FileTablePart(chain, k, path, Tuple(names), names)
 
 function _file_table(part::_FileTablePart, file)
+    names = _part_colnames(part)
     lock(part.chain.lock) do
-        get!(file.tables, (part.path, part.names)) do
+        get!(file.tables, (part.path, names)) do
             store = file.lhd.data_store
             haskey(store, part.path) || _missing_object(part.chain, part.k, part.path)
-            _lazy_table(store[part.path], part.names)
+            _lazy_table(store[part.path], names)
         end
     end
 end
@@ -274,22 +276,24 @@ end
 _with_part_table(f, part::_FileTablePart, paths) =
     _with_checked_file(file -> f(_file_table(part, file)), part.chain, part.k, paths)
 
-_part_colnames(part::_FileTablePart) = part.names
+_part_colnames(part::_FileTablePart) = collect(Symbol, _tree_names(part.tree))
 _fixed_part(::_FileTablePart) = true
 
-# The columns of the first file, with those of its nested tables:
+# The selected columns of the first file, with those of its nested tables:
 function _part_tree(part::_FileTablePart)
-    chain, key = part.chain, (part.path, part.names)
+    chain, key = part.chain, (part.path, part.tree)
     cached = lock(() -> get(chain.trees, key, nothing), chain.lock)
     isnothing(cached) || return cached
-    tree = _build_name_tree(part, part.names)
+    tree = _build_name_tree(part, part.tree)
     lock(() -> chain.trees[key] = tree, chain.lock)
 end
 
-_name_tree(part::_FileTablePart, names) = names == part.names ? _part_tree(part) : _build_name_tree(part, names)
+function _name_tree(part::_FileTablePart, tree)
+    t = (tree...,)
+    t == part.tree || t == _tree_names(part.tree) ? _part_tree(part) : _build_name_tree(part, t)
+end
 
-_select(part::_FileTablePart, names) =
-    _FileTablePart(part.chain, part.k, part.path, collect(Symbol, names), part.allnames)
+_select(part::_FileTablePart, tree) = _FileTablePart(part.chain, part.k, part.path, (tree...,), part.allnames)
 
 # The columns of a tree as the names that lead to them, and their paths:
 _tree_leaves(tree) = mapreduce(vcat, tree; init = Tuple{Vararg{Symbol}}[]) do entry
@@ -311,7 +315,7 @@ _tree_columns(part::_FileTablePart, tbl, tree, path::AbstractString = part.path)
 # columns must still have the rows of the whole table:
 function _part_rows(part::_FileTablePart, idxs)
     tree = _part_tree(part)
-    n = part.names == part.allnames ? nothing : _part_length(part)
+    n = _selects_all(part.tree, part.allnames) ? nothing : _part_length(part)
     _with_part_table(part, _tree_paths(part.path, tree)) do tbl
         cols = _tree_columns(part, tbl, tree)
         isnothing(n) || length(cols) == n || throw(DimensionMismatch(
@@ -399,7 +403,7 @@ end
 
 # The first file decides whether a column is a nested table:
 _first_column(f, part::_FileTablePart, name::Symbol) = _with_file(part.chain, 1) do file
-    f(getproperty(_file_table(_FileTablePart(part.chain, 1, part.path, part.names), file), name))
+    f(getproperty(_file_table(_FileTablePart(part.chain, 1, part.path, part.tree, part.allnames), file), name))
 end
 
 # Decided by the datatype, so that finding the structure opens no column:

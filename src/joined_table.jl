@@ -76,24 +76,40 @@ function _getindex_rows(tbl::LH5JoinedTable, idxs)
     StructArray(NamedTuple{(names...,)}(map((name, k) -> getproperty(rows[k], name), (names...,), Tuple(owners))))
 end
 
+# A selection of columns is a name tree, as `_name_tree` builds them: a name
+# selects a column or a whole nested table, a name paired with a subtree
+# selects part of a nested table. `_select(tbl, tree)` gives a table of those
+# columns, opening none of them if it can. A column that is not a table, such
+# as waveforms, is taken whole:
+_tree_names(tree) = map(_tree_name, (tree...,))
+_selects_all(tree, colnames) = all(entry -> entry isa Symbol, tree) && issetequal(_tree_names(tree), colnames)
+_select_column(x, name::Symbol) = getproperty(x, name)
+_select_column(x, entry::Pair) = _select(getproperty(x, first(entry)), last(entry))
+_select(col::AbstractArray, ::Any) = col
+
 # A part with only some of its columns, each of which must have the rows of the part:
-function _select(tbl::AbstractLH5Table, names)
-    issetequal(names, _table_colnames(tbl)) && return tbl
-    cols = NamedTuple{(names...,)}(map(name -> getproperty(tbl, name), (names...,)))
+function _select(tbl::AbstractLH5Table, tree)
+    _selects_all(tree, _table_colnames(tbl)) && return tbl
+    cols = NamedTuple{_tree_names(tree)}(map(entry -> _select_column(tbl, entry), (tree...,)))
     n = length(tbl)
     foreach(pairs(cols)) do (name, col)
         last(size(col)) == n || throw(DimensionMismatch("Column $name has $(last(size(col))) rows, its table has $n"))
     end
     LH5JoinedTable(cols)
 end
-_select(cols::NamedTuple, names) = NamedTuple{(names...,)}(cols)
+_select(cols::NamedTuple, tree) = NamedTuple{_tree_names(tree)}(map(entry -> _select_column(cols, entry), (tree...,)))
 
 # A join selects from its parts, so that their columns are not opened:
-function _select(tbl::LH5JoinedTable, names)
-    issetequal(names, _table_colnames(tbl)) && return tbl
+function _select(tbl::LH5JoinedTable, tree)
+    _selects_all(tree, _table_colnames(tbl)) && return tbl
     parts, owners, colnames = _join_parts(tbl), getfield(tbl, :owners), _table_colnames(tbl)
-    selected = [k => colnames[(owners .== k) .& in.(colnames, Ref(names))] for k in unique(owners)]
-    LH5JoinedTable((_select(parts[k], ks) for (k, ks) in selected if !isempty(ks))...)
+    function owner(entry)
+        i = findfirst(==(_tree_name(entry)), colnames)
+        isnothing(i) && _no_column(_tree_name(entry))
+        owners[i]
+    end
+    groups = [k => [entry for entry in tree if owner(entry) == k] for k in unique(owners)]
+    LH5JoinedTable((_select(parts[k], Tuple(entries)) for (k, entries) in groups if !isempty(entries))...)
 end
 
 _join_rows(tbl::AbstractLH5Table, idxs) = tbl[idxs]
