@@ -202,17 +202,30 @@ const _rows_per_block = 4096
 
 _getindex_rows(tbl::AbstractLH5Table, idxs) = _getindex_columns(_typed_table(tbl), idxs)
 
-# Reading rows in blocks keeps loops over a table from reading one row at a
-# time, and keeps their memory bounded. The state holds the current block:
-function Base.iterate(tbl::AbstractLH5Table, state = (1, nothing, 0))
-    i, block, offset = state
-    if block === nothing || i > offset + length(block)
-        n = length(tbl)
-        i > n && return nothing
-        block = tbl[i:min(i + _rows_per_block - 1, n)]
-        offset = i - 1
+# Iteration reads rows in blocks, which keeps loops over a table from reading
+# one row at a time and keeps their memory bounded. `_next_block(tbl, state)`
+# returns the next block of rows with the state after it, or `nothing` at the
+# end, and `_first_block_state(tbl)` the state before the first block. Tables
+# whose length is costly read part by part instead:
+_first_block_state(::AbstractLH5Table) = 1
+
+function _next_block(tbl::AbstractLH5Table, i::Int)
+    n = length(tbl)
+    i > n && return nothing
+    stop = min(i + _rows_per_block - 1, n)
+    (tbl[i:stop], stop + 1)
+end
+
+# The state holds the current block and the position in it:
+function Base.iterate(tbl::AbstractLH5Table, state = (nothing, 0, _first_block_state(tbl)))
+    block, pos, next_state = state
+    while isnothing(block) || pos == length(block)
+        next = _next_block(tbl, next_state)
+        isnothing(next) && return nothing
+        block, next_state = next
+        pos = 0
     end
-    (block[i - offset], (i + 1, block, offset))
+    (block[pos + 1], (block, pos + 1, next_state))
 end
 
 Base.broadcastable(tbl::AbstractLH5Table) = _typed_table(tbl)

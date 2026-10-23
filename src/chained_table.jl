@@ -178,23 +178,17 @@ function _getindex_rows(tbl::LH5ChainedTable, idxs::AbstractVector{<:Integer})
     isnothing(order) ? rows : rows[invperm(order)]
 end
 
-# Rows are read in blocks, part by part, so iterating needs no total length.
-# The state holds the part, the rows of it read so far and the current block:
-function Base.iterate(tbl::LH5ChainedTable, state = (1, 0, nothing, 0))
-    k, read, block, pos = state
-    parts = _chain_parts(tbl)
-    while isnothing(block) || pos == length(block)
-        k > length(parts) && return nothing
-        n = _part_length(tbl, k)
-        if read == n
-            k, read, block = k + 1, 0, nothing
-        else
-            stop = min(read + _rows_per_block, n)
-            block = _read_rows(tbl, k, read + 1:stop)
-            read, pos = stop, 0
-        end
-    end
-    (block[pos + 1], (k, read, block, pos + 1))
+# Blocks are read part by part, so iterating needs no total length. The
+# state holds the part and the rows of it read so far:
+_first_block_state(::LH5ChainedTable) = (1, 0)
+
+function _next_block(tbl::LH5ChainedTable, state::Tuple{Int, Int})
+    k, read = state
+    k > length(_chain_parts(tbl)) && return nothing
+    n = _part_length(tbl, k)
+    read == n && return _next_block(tbl, (k + 1, 0))
+    stop = min(read + _rows_per_block, n)
+    (_read_rows(tbl, k, read + 1:stop), (k, stop))
 end
 
 function _column(tbl::LH5ChainedTable, name::Symbol)
