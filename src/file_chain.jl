@@ -12,9 +12,9 @@ from, and at most `max_open` of them stay open. Objects from the chain stop
 working when the chain is closed.
 
 The first file defines the structure: the column names of tables, and the
-datatypes, units, element types and inner sizes of what they hold. Other
-files are checked against it when a column is first read from them, so they
-need to agree only on what is read. Chains are read-only.
+datatypes, units, codecs, element types and inner sizes of what they hold.
+Other files are checked against it when a column is first read from them, so
+they need to agree only on what is read. Chains are read-only.
 """
 mutable struct LH5FileChain
     filenames::Vector{String}
@@ -137,15 +137,22 @@ const _count_datasets = ("cumulative_length", "decoded_size")
 # equal-size arrays, so its value must match as well:
 function _structure(obj::HDF5.Dataset, name::AbstractString = "")
     counts = name in _count_datasets
-    (datatype = _datatype_key(obj), units = getattribute(obj, :units, ""),
+    (datatype = _datatype_key(obj), units = getattribute(obj, :units, ""), codec = _codec(obj),
         eltype = counts ? Integer : _julia_eltype(obj), inner = size(obj)[1:end-1],
         value = counts && ndims(obj) == 0 ? read(obj) : nothing)
 end
 
 function _structure(obj::HDF5.Group, ::AbstractString = "")
     members = sort!(collect(keys(obj)))
-    (datatype = _datatype_key(obj), units = getattribute(obj, :units, ""),
+    (datatype = _datatype_key(obj), units = getattribute(obj, :units, ""), codec = _codec(obj),
         members = [name => _with_object(member -> _structure(member, name), obj, name) for name in members])
+end
+
+# Encoded data decodes only with the codec it was encoded with, parameters included:
+function _codec(obj)
+    name = getattribute(obj, :codec, "")
+    isempty(name) && return nothing
+    read_from_properties(getattribute, obj, LegendDataTypes.array_codecs.by_name[Symbol(name)])
 end
 
 # Writers differ in the order of the fields of tables and structs:
@@ -170,7 +177,7 @@ end
 function _check_structure(chain::LH5FileChain, file, k::Integer, path::AbstractString, expected)
     lock(() -> (k, path) in chain.checked, chain.lock) && return nothing
     _structure(chain, file, k, path) == expected || throw(ArgumentError(
-        "\"$path\" in $(chain.filenames[k]) differs from $(chain.filenames[1]) in its datatype, units, element type or size"))
+        "\"$path\" in $(chain.filenames[k]) differs from $(chain.filenames[1]) in its datatype, units, codec, element type or size"))
     lock(() -> push!(chain.checked, (k, path)), chain.lock)
     nothing
 end

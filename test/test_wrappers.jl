@@ -1634,6 +1634,22 @@ struct AboveHalf end
                 @test_throws ArgumentError t[3:3]
                 @test_throws ArgumentError [r.e for r in t]
             end
+            # the files must agree on the codecs of encoded columns, parameters included:
+            cs = [joinpath(dir, "codec$i.lh5") for i in 1:3]
+            for (fn, c) in zip(cs, (RadwareSigcompress(0), RadwareSigcompress(1000), VarlenDiffArrayCodec()))
+                lh5open(fn, "w") do lhd
+                    lhd["t"] = StructArray((e = broadcast(|>, VectorOfArrays([Int32.(rand(-5:5, 3)) for _ in 1:2]), c),))
+                end
+            end
+            lh5open(cs[1:2]) do fc
+                t = fc["t"]
+                @test t[1:2].e isa VectorOfEncodedArrays
+                @test_throws ArgumentError t[3:4]
+                @test_throws ArgumentError t.e
+            end
+            lh5open(cs[[1, 3]]) do fc
+                @test_throws ArgumentError fc["t"][3:4]
+            end
             # nested tables stored under a registered datatype name:
             LegendHDF5IO.register_datatype!("chained_nested", StructArray{<:NamedTuple{(:chained_z,)}})
             rs = [joinpath(dir, "r$i.lh5") for i in 1:2]

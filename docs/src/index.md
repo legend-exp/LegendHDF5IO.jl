@@ -148,10 +148,10 @@ end
 
 Files are opened when they are read from, and at most `max_open` of them (64
 by default) stay open. The first file defines the structure: column names,
-datatypes, units, element types and inner sizes. Another file is checked
-against it when a column is first read from it, so the files need to agree
-only on what is read. A difference throws an `ArgumentError` that names the
-file. Objects from the chain stop working when it is closed.
+datatypes, units, codecs, element types and inner sizes. Another file is
+checked against it when a column is first read from it, so the files need to
+agree only on what is read. A difference throws an `ArgumentError` that names
+the file. Objects from the chain stop working when it is closed.
 
 ### Appending and compression
 
