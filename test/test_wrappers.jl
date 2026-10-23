@@ -1660,6 +1660,12 @@ struct AboveHalf end
                 @test j[1:2].x == zeros(Float32, 2) && j[1:2].sub.c == joined(t -> t.sub.c)[1:2]
                 @test t[1].x == xs[1] && t.x[:] == xs
             end
+            # counting the rows of some columns reads the structure of those columns only:
+            lh5open(fns; max_open = 1) do fc
+                j = innermerge(fc["t"], (v = fill(0f0, sum(ns)), sub = fill(0, sum(ns))))
+                @test j[1:2].x == xs[1:2]
+                @test collect(keys(fc.structures)) == ["t/x"]
+            end
             # nested leases do not keep more than max_open files open:
             lh5open(fns; max_open = 1) do fc
                 t = fc["t"]

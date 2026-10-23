@@ -315,25 +315,45 @@ end
 
 # The row count comes from the shape of the first column that the file has
 # and that the first file stores as a dataset, nested tables searched as well,
-# so columns that are not read need not be present. Counting rows reads
-# neither the column nor its structure:
-function _part_length(projected::_FileTablePart)
-    part = _FileTablePart(projected.chain, projected.k, projected.path, projected.allnames)
-    leaves = _tree_leaves(_part_tree(part))
-    isempty(leaves) && return 0
-    kind(names) = hasproperty(_first_structure(part.chain, _names_path(part.path, names)), :members) ? :group : :dataset
-    _with_file(part.chain, part.k) do file
+# so columns that are not read need not be present. The columns are looked at
+# in table order until one is found, so counting rows reads neither the column
+# nor the structures of the columns behind it:
+function _part_length(part::_FileTablePart)
+    chain, k, path, names = part.chain, part.k, part.path, part.allnames
+    isempty(names) && return 0
+    _with_file(chain, k) do file
         store = file.lhd.data_store
-        _object_kind(store, part.path) == :group || _missing_object(part.chain, part.k, part.path)
-        _with_object(store, part.path) do table
-            has(names, k) = _column_kind(table, names) == k
-            i = findfirst(names -> kind(names) == :dataset && has(names, :dataset), leaves)
-            isnothing(i) || return _with_object(_nrows, table, join(map(String, leaves[i]), '/'))
-            j = findfirst(names -> has(names, kind(names)), leaves)
-            isnothing(j) && _missing_object(part.chain, part.k, _names_path(part.path, first(leaves)))
-            length(foldl(getproperty, leaves[j]; init = _file_table(part, file)))
+        _object_kind(store, path) == :group || _missing_object(chain, k, path)
+        _with_object(store, path) do table
+            witness = _row_witness(chain, path, table, names)
+            isnothing(witness) && _missing_object(chain, k, _child_path(path, first(names)))
+            leaf, kind = witness
+            kind == :dataset ? _with_object(_nrows, table, join(map(String, leaf), '/')) :
+                length(foldl(getproperty, leaf; init = _file_table(_FileTablePart(chain, k, path, names), file)))
         end
     end
+end
+
+# The first column, nested tables included, that the first file stores as a
+# dataset and `table` has as one, with its kind. Failing that, the first
+# column that `table` stores like the first file. Nothing if `table` has none
+# of them:
+function _row_witness(chain::LH5FileChain, path::AbstractString, table, names, prefix::Tuple = ())
+    fallback = nothing
+    for name in names
+        leaf = (prefix..., Symbol(name))
+        structure = _first_structure(chain, _names_path(path, leaf))
+        if !hasproperty(structure, :members)
+            _column_kind(table, leaf) == :dataset && return (leaf, :dataset)
+        elseif _is_table_datatype(structure.datatype)
+            found = _row_witness(chain, path, table, map(first, structure.members), leaf)
+            isnothing(found) || last(found) == :group || return found
+            isnothing(fallback) && (fallback = found)
+        elseif isnothing(fallback) && _column_kind(table, leaf) == :group
+            fallback = (leaf, :group)
+        end
+    end
+    fallback
 end
 
 # :dataset, :group, or nothing if there is no object at the path, without
