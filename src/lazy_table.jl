@@ -1,17 +1,20 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
 """
-    AbstractLH5Table <: AbstractVector{NamedTuple}
+    AbstractLH5Table{R<:NamedTuple} <: AbstractVector{R}
 
 Supertype of the lazy tables of LH5 data: [`LH5LazyTable`](@ref),
-[`LH5JoinedTable`](@ref) and [`LH5ChainedTable`](@ref).
+[`LH5JoinedTable`](@ref), [`LH5ChainedTable`](@ref) and
+[`LH5TypedTable`](@ref).
 
 A lazy table is a vector of `NamedTuple` rows. Its column names are known up
-front, the element type of a column only once the column is opened. Accessing
+front, the element type of a column only once the column is opened, so the
+row type `R` is the abstract `NamedTuple`, except for typed tables. Accessing
 a column, with `tbl.colname` or `Tables.getcolumn`, opens that column and no
 other, and `Tables.columns(tbl)` is a dictionary of the columns (see
 [`LH5LazyColumns`](@ref)). Column-wise broadcasts, such as PropertyFunctions,
-open only the columns they use.
+open only the columns they use, and PropertyFunctions selections return typed
+tables.
 
 Treating the table as an array opens all columns. Indexing with a range,
 index vector or mask reads the selected rows into a `StructArray`, and
@@ -30,10 +33,10 @@ read from them do not.
 # Implementation
 
 Subtypes implement `_table_colnames(tbl)`, `_column(tbl, name)` and
-`length(tbl)`, and may specialize `_typed_table(tbl)` and
-`_getindex_rows(tbl, idxs)`.
+`length(tbl)`, and may specialize `_typed_table(tbl)`,
+`_getindex_rows(tbl, idxs)` and the block iteration, `_next_block`.
 """
-abstract type AbstractLH5Table <: AbstractVector{NamedTuple} end
+abstract type AbstractLH5Table{R<:NamedTuple} <: AbstractVector{R} end
 
 """
     LH5LazyTable <: AbstractLH5Table
@@ -58,7 +61,7 @@ therefore not inferable, which costs little in practice: the datatype
 attributes are only read at run time, so code that loops over rows has to
 pass the selected columns through a function boundary either way.
 """
-mutable struct LH5LazyTable <: AbstractLH5Table
+mutable struct LH5LazyTable <: AbstractLH5Table{NamedTuple}
     data_store::HDF5.H5DataStore
     colnames::Vector{Symbol}
     columns::Dict{Symbol, Any}
@@ -206,7 +209,8 @@ _getindex_rows(tbl::AbstractLH5Table, idxs) = _getindex_columns(_typed_table(tbl
 # one row at a time and keeps their memory bounded. `_next_block(tbl, state)`
 # returns the next block of rows with the state after it, or `nothing` at the
 # end, and `_first_block_state(tbl)` the state before the first block. Tables
-# whose length is costly read part by part instead:
+# whose length is costly read part by part instead, and typed tables read the
+# blocks of the table they select from:
 _first_block_state(::AbstractLH5Table) = 1
 
 function _next_block(tbl::AbstractLH5Table, i::Int)

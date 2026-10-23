@@ -14,7 +14,7 @@ lazily, which opens the column in each part. The parts must have the same
 columns, and rows take the column order of the first part. Chained tables
 and their columns are read-only.
 """
-struct LH5ChainedTable <: AbstractLH5Table
+struct LH5ChainedTable <: AbstractLH5Table{NamedTuple}
     parts::Vector{Any}
     colnames::Vector{Symbol}
     lengths::Vector{Int}
@@ -40,9 +40,11 @@ _part_length(tbl::Union{AbstractLH5Table, _MemoryTable}) = length(tbl)
 _is_subtable(tbl::Union{AbstractLH5Table, _MemoryTable}, name::Symbol) =
     getproperty(tbl, name) isa Union{AbstractLH5Table, _MemoryTable}
 _subpart(tbl::Union{AbstractLH5Table, _MemoryTable}, name::Symbol) = getproperty(tbl, name)
+# A column of a chain would be concatenated over every part to look at it:
+_is_subtable(tbl::LH5ChainedTable, name::Symbol) = _is_subtable(first(_chain_parts(tbl)), name)
 _part_colnames(tbl::_MemoryTable) = collect(Symbol, propertynames(tbl))
 _part_column(tbl::_MemoryTable, name::Symbol) = getproperty(tbl, name)
-_select(tbl::_MemoryTable, names) = StructArray(NamedTuple{(names...,)}(map(name -> getproperty(tbl, name), (names...,))))
+_select(tbl::_MemoryTable, tree) = StructArray(NamedTuple{_tree_names(tree)}(map(entry -> _select_column(tbl, entry), (tree...,))))
 _check_colnames(part, names) = issetequal(_part_colnames(part), names) ||
     throw(ArgumentError("Tables to concatenate have different columns: " *
         "$(join(names, ", ")) and $(join(_part_colnames(part), ", "))"))
@@ -68,8 +70,9 @@ function _chain_tables(tbls::AbstractVector)
     _chained(parts, names, lengths)
 end
 
-# Lengths are found part by part, as far as they are needed:
-function _part_length(tbl::LH5ChainedTable, k::Integer)
+# Lengths are found part by part, as far as they are needed. The parts are
+# of any type, so the count is asserted for the iteration state's sake:
+function _part_length(tbl::LH5ChainedTable, k::Integer)::Int
     part = _chain_parts(tbl)[k]
     _fixed_part(part) || return _part_length(part)
     lengths = getfield(tbl, :lengths)
@@ -114,12 +117,16 @@ function _row_names(tbl::LH5ChainedTable)
     end
 end
 
-_name_tree(part, names) = _build_name_tree(part, names)
+_name_tree(part, tree) = _build_name_tree(part, tree)
 
-_build_name_tree(part, names) = Tuple(map(names) do name
+# A name tree names the columns of a part, with the columns of its nested
+# tables as subtrees. Built from a selection (see `_select`), it expands the
+# names of whole nested tables and keeps the subtrees of partly selected ones:
+_build_name_tree(part, tree) = Tuple(map((tree...,)) do entry
+    name = _tree_name(entry)
     _is_subtable(part, name) || return name
     sub = _subpart(part, name)
-    name => _name_tree(sub, _part_colnames(sub))
+    name => _name_tree(sub, entry isa Pair ? last(entry) : _part_colnames(sub))
 end)
 
 _tree_name(name::Symbol) = name
@@ -199,8 +206,8 @@ end
 
 # A chain of the parts with some of their columns, sharing what is known of
 # their lengths:
-_select(tbl::LH5ChainedTable, names) = issetequal(names, _table_colnames(tbl)) ? tbl :
-    LH5ChainedTable(Any[_select(part, names) for part in _chain_parts(tbl)], collect(Symbol, names),
+_select(tbl::LH5ChainedTable, tree) = _selects_all(tree, _table_colnames(tbl)) ? tbl :
+    LH5ChainedTable(Any[_select(part, tree) for part in _chain_parts(tbl)], collect(Symbol, _tree_names(tree)),
         getfield(tbl, :lengths), Dict{Symbol, Any}(), Ref{Any}(nothing), _table_lock(tbl))
 
 # The column of every part must have the rows of the part, or the

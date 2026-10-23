@@ -1,6 +1,6 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
-export LHDataStore, LH5FileChain, LH5Array, AbstractLH5Table, LH5LazyTable, LH5JoinedTable, LH5ChainedTable, LH5LazyColumns
+export LHDataStore, LH5FileChain, LH5Array, AbstractLH5Table, LH5LazyTable, LH5JoinedTable, LH5ChainedTable, LH5TypedTable, LH5LazyColumns
 
 """
     LH5Array{T, N} <: AbstractArray{T, N}
