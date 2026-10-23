@@ -7,6 +7,7 @@ using ArraysOfArrays
 using DiskArrays
 using EncodedArrays
 using HDF5
+using LegendDataTypes: RadwareSigcompress
 using Measurements
 using PropertyFunctions
 using RadiationDetectorSignals
@@ -995,7 +996,7 @@ struct AboveHalf end
                 @test !isempty(tbl)
                 @test firstindex(tbl) == 1 && lastindex(tbl) == n
                 @test tbl isa AbstractVector{NamedTuple}
-                @test LH5LazyTable <: AbstractLH5Table <: AbstractVector{NamedTuple}
+                @test LH5LazyTable <: AbstractLH5Table{NamedTuple} <: AbstractVector{NamedTuple}
                 @test eltype(tbl) === NamedTuple
                 @test axes(tbl) == (1:n,)
                 @test IndexStyle(tbl) === IndexLinear()
@@ -1194,7 +1195,52 @@ struct AboveHalf end
                 @test Set(opened(tbl)) == Set([:a])
                 @test filterby(@pf $b > 0)(tbl) == tbl[:][b .> 0]
                 nt = (@pf (c = $a, d = $b)).(tbl)
-                @test nt isa LH5JoinedTable && nt.c === tbl.a && nt.d == b
+                @test nt isa LH5TypedTable && nt.c === tbl.a && nt.d == b
+            end
+
+            lh5open(fn, "r") do lhd
+                # a selection fixes the row type and the block column types from the opened columns:
+                tbl = lhd["tbl"]
+                sel = (@pf (c = $a, d = $b)).(tbl)
+                @test sel isa LH5TypedTable && sel isa AbstractLH5Table && sel isa AbstractVector{<:NamedTuple}
+                @test eltype(sel) == @NamedTuple{c::Float32, d::Int32}
+                @test Set(opened(tbl)) == Set([:a, :b])
+                @test propertynames(sel) == (:c, :d) && sel.c === tbl.a
+                @test_throws ArgumentError sel.nope
+                @test length(sel) == n && sel[:] == StructArray((c = a, d = b))
+                @test @inferred(sel[1:3]) == StructArray((c = a[1:3], d = b[1:3]))
+                @test @inferred(sel[[5, 1]]).c == a[[5, 1]] && @inferred(sel[2]) == (c = a[2], d = b[2])
+                @test @inferred(sel[b .> 0]) == sel[:][b .> 0]
+                @test @inferred(collect(sel)) == collect(StructArray((c = a, d = b)))
+                first_row = @inferred Nothing iterate(sel)
+                @test first(first_row) == (c = a[1], d = b[1])
+                @test [r.d for r in sel] == b && sum(r -> r.c, sel) ≈ sum(a)
+                @test Tables.schema(sel) == Tables.Schema((:c, :d), (Float32, Int32))
+                @test Tables.columns(sel) isa LH5LazyColumns && Tables.columntype(sel, :c) == Float32
+                @test (@pf $c * 2).(sel) == 2 .* a
+                @test filterby(@pf $d > 0)(sel) == sel[:][b .> 0]
+                @test occursin("LH5TypedTable(2 columns", sprint(show, sel))
+                @test_throws ArgumentError append!(sel, sel[1:1])
+                # ragged columns keep their type in blocks:
+                svv = (@pf (; $vov, $a)).(tbl)
+                @test eltype(svv[1:2].vov) <: AbstractVector{Float32} && svv[1:2].vov == vov[1:2] && svv[1:2].vov isa VectorOfVectors
+                # a selection of a selection selects from the table:
+                s2 = (@pf (e = $c,)).(sel)
+                @test s2 isa LH5TypedTable && s2.e === tbl.a && s2[:].e == a && eltype(s2) == @NamedTuple{e::Float32}
+                # nested paths select into nested tables, renamed or not, and whole nested tables stay tables:
+                nested = lhd["nested"]
+                sn = (@pf (bb = $y.b, xa = $x.a)).(nested)
+                @test eltype(sn) == @NamedTuple{bb::Int32, xa::Float32} && sn[:] == StructArray((bb = b, xa = a))
+                @test sn.bb === nested.y.b
+                @test Set(opened(nested.y)) == Set([:b])
+                sw = (@pf (; $y)).(nested)
+                @test eltype(sw) <: NamedTuple{(:y,)} && sw[1:2].y == StructArray((b = b[1:2], vov = vov[1:2]))
+                @test @inferred(sw[1:2]).y isa StructArray
+                # selections into the nested columns of a selection, through a join and through a chain:
+                sq = (@pf (bb = $y.b, qq = $q)).(innermerge(sw, (q = collect(1:n),)))
+                @test eltype(sq) == @NamedTuple{bb::Int32, qq::Int} && sq[:] == StructArray((bb = b, qq = collect(1:n)))
+                sc = (@pf (bb = $y.b,)).(vcat(sw, sw))
+                @test eltype(sc) == @NamedTuple{bb::Int32} && sc[:].bb == vcat(b, b) && @inferred(sc[n:n + 1]).bb == b[[n, 1]]
             end
 
             lh5open(fn, "r") do lhd
@@ -1259,10 +1305,11 @@ struct AboveHalf end
                 @test [r.y for r in j] == y
                 @test length(j) == n && Tables.columns(j) isa LH5LazyColumns
                 @test occursin("3 columns", sprint(show, j))
-                # materializing wraps what it is given, and only columns on disk need a lazy table:
-                s = (@pf (z = $x,)).(ta)
-                @test s isa LH5JoinedTable && s.z === ta.x
+                # selections of joins select from the owning tables, and materializing wraps what it is given:
+                s = (@pf (z = $x,)).(j)
+                @test s isa LH5TypedTable && s.z === tb.x && s[:].z == 2 .* x
                 @test Tables.materializer(ta)((p = [1, 2],)) isa StructArray
+                @test Tables.materializer(ta)((p = ta.x,)) isa LH5JoinedTable
                 @test Tables.materializer(ta)(ta) === ta
                 jn = innermerge(lhd["n"], (q = x,))
                 @test jn.sub isa LH5LazyTable && jn[2].sub.w == x[2]
@@ -1384,6 +1431,9 @@ struct AboveHalf end
                 @test c.wf[10].signal == mem[3].wf[3].signal
                 @test c.sub isa LH5ChainedTable && c.sub.c[:] == joined(t -> t.sub.c)
                 @test [r.b for r in c] == bs
+                # paths into columns that are not tables, like waveforms, take the column whole:
+                sw = (@pf (sig = $wf.signal, b = $b)).(c)
+                @test sw[10].sig == mem[3].wf[3].signal && sw[1:2].sig == [w.signal for w in mem[1].wf[1:2]]
                 @test (@pf $x * 2).(c) == 2 .* xs
                 @test filterby(@pf $b > 0)(c) == rows[bs .> 0]
                 @test Tables.columns(c) isa LH5LazyColumns
@@ -1531,6 +1581,33 @@ struct AboveHalf end
                 @test length(c) == 5 && length(c.v) == 5 && length(c[:]) == 5
                 @test c[:].v[4] == Float32[] && c.v[5] == Float32[]
             end
+            # a selection over a chain takes the column types of the first part, and converts the others:
+            lh5open(joinpath(dir, "types.lh5"), "w") do lhd
+                lhd["a"] = StructArray((x = Int32[1, 2], y = [1.0, 2.0]))
+                lhd["b"] = StructArray((x = Int64[3, 4], y = [3.0, 4.0]))
+                lhd["c"] = StructArray((x = [Int64(2)^40], y = [5.0]))
+                s = (@pf (; $x)).(vcat(lhd["a"], lhd["b"]))
+                @test s isa LH5TypedTable && eltype(s) == @NamedTuple{x::Int32}
+                @test @inferred(s[3:4]) == StructArray((x = Int32[3, 4],))
+                @test s[1:4].x isa Vector{Int32} && s[[4, 1]].x == Int32[4, 1] && s[:].x == Int32[1, 2, 3, 4]
+                @test [r.x for r in s] == Int32[1, 2, 3, 4] && eltype(collect(s)) == eltype(s)
+                @test_throws InexactError (@pf (; $x)).(vcat(lhd["a"], lhd["c"]))[3:3]
+                # ranges among the columns of a join read as vectors:
+                j = innermerge(lhd["a"], (i = 1:2,))
+                si = (@pf (; $i, $y)).(j)
+                @test eltype(si) == @NamedTuple{i::Int, y::Float64} && si[1:2].i isa Vector{Int} && si[[2, 1]].i == [2, 1]
+                # waveforms and ragged arrays convert to the first part's types as well:
+                trng2 = range(0.0u"μs", 1.0u"μs"; length = 2)
+                lhd["wa"] = StructArray((wf = ArrayOfRDWaveforms((fill(trng2, 2), VectorOfSimilarVectors(Int32[1 2; 3 4]))),))
+                lhd["wb"] = StructArray((wf = ArrayOfRDWaveforms((fill(trng2, 1), VectorOfSimilarVectors(Int64[5; 6;;]))),))
+                sw2 = (@pf (; $wf)).(vcat(lhd["wa"], lhd["wb"]))
+                @test sw2[3].wf.signal == Int32[5, 6] && sw2[3:3].wf isa ArrayOfRDWaveforms
+                @test sw2[:].wf[3].signal == Int32[5, 6] && eltype(flatview(sw2[:].wf.signal)) == Int32
+                pa = LH5JoinedTable((v = VectorOfVectors([1, 2], Int32[1, 2, 3]),))
+                pb = LH5JoinedTable((v = VectorOfVectors([3, 4], Int32[1, 3]),))
+                sv2 = (@pf (; $v)).(vcat(pa, pb))
+                @test sv2[:].v == [[1], [2], [3, 4]] && sv2[3:3].v == [[3, 4]] && sv2[[3, 1]].v == [[3, 4], [1]]
+            end
 
             hs = lh5open.(fns)
             try
@@ -1660,6 +1737,61 @@ struct AboveHalf end
             end
             lh5open(cs[[1, 3]]) do fc
                 @test_throws ArgumentError fc["t"][3:4]
+            end
+            # a selection over a file chain opens the first file only, and fixes the row type there:
+            lh5open(fns; max_open = 1) do fc
+                s = (@pf (xx = $x, c = $sub.c, v = $v)).(fc["t"])
+                @test collect(keys(fc.files)) == [1] && isempty(fc.checked)
+                @test eltype(s) == @NamedTuple{xx::Float32, c::Float64, v::eltype(mem[1].v)}
+                cs_all = joined(t -> t.sub.c)
+                @test @inferred(s[1:3]) == StructArray((xx = xs[1:3], c = cs_all[1:3], v = mem[1].v[1:3]))
+                @test collect(keys(fc.files)) == [1]
+                @test [r.xx for r in s] == xs && s[:].c == cs_all && collect(s[:].v) == joined(t -> t.v)
+                @test s[[10, 2]].xx == xs[[10, 2]] && length(s) == sum(ns) && !isempty(s)
+                @test s.xx[:] == xs && s.xx isa DiskArrays.AbstractDiskArray
+                @test Tables.schema(s).names == (:xx, :c, :v)
+                @test first(s, 2).xx == xs[1:2] && first(s).xx == xs[1]
+                @test nopen(fc) <= 1
+                # iteration infers its state, block after block:
+                r1 = @inferred Nothing iterate(s)
+                r2 = @inferred Nothing iterate(s, last(r1))
+                @test first(r1).xx == xs[1] && first(r2).xx == xs[2]
+            end
+            # a selection over a chain of selections opens the first file only, too:
+            lh5open(fns; max_open = 1) do fc
+                s = (@pf (; $x, $sub)).(fc["t"])
+                s2 = (@pf (c = $sub.c,)).(vcat(s, s))
+                @test collect(keys(fc.files)) == [1] && isempty(fc.checked)
+                @test s2[:].c == repeat(joined(t -> t.sub.c), 2)
+            end
+            # an empty first file still gives the types:
+            lh5open(fns[[2, 1]]) do fc
+                s = (@pf (; $x)).(fc["t"])
+                @test eltype(s) == @NamedTuple{x::Float32} && s[:].x == mem[1].x && isempty(s[1:0])
+            end
+            # a nested column selected on its own must still have the rows of the table:
+            gs = [joinpath(dir, "grown$i.lh5") for i in 1:2]
+            for (i, fn) in enumerate(gs)
+                lh5open(fn, "w"; usechunks = true) do lhd
+                    lhd["t"] = StructArray((a = [i, i], sub = StructArray((c = [1, 2], d = [1, 2]))))
+                    append!(lhd["t"].sub.d, [3])
+                end
+            end
+            lh5open(gs) do fc
+                @test_throws DimensionMismatch (@pf (dd = $sub.d,)).(fc["t"])
+            end
+            # nested paths read only the columns they name, in every file:
+            ps = [joinpath(dir, "paths$i.lh5") for i in 1:2]
+            for (i, fn) in enumerate(ps)
+                lh5open(lhd -> lhd["t"] = StructArray((a = [i], sub = StructArray((c = [10i], d = [100i])))), fn, "w")
+            end
+            lh5open(ps; max_open = 1) do fc
+                s = (@pf (c = $sub.c, a = $a)).(fc["t"])
+                @test eltype(s) == @NamedTuple{c::Int, a::Int} && s[:] == StructArray((c = [10, 20], a = [1, 2]))
+                @test "t/sub/d" ∉ keys(fc.structures) && !any(((k, path),) -> endswith(path, "/d"), fc.checked)
+                @test [r.c for r in s] == [10, 20] && s[2:2].a == [2]
+                w = (@pf (; $sub)).(fc["t"])
+                @test w[:].sub == StructArray((c = [10, 20], d = [100, 200]))
             end
             # nested tables stored under a registered datatype name:
             LegendHDF5IO.register_datatype!("chained_nested", StructArray{<:NamedTuple{(:chained_z,)}})
