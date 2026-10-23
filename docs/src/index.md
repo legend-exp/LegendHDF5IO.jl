@@ -103,14 +103,38 @@ file systems such as GPFS, NFS or Lustre, which pay per read operation. The
 file system is recognized from the mount table on Linux. Set the thresholds
 to override the defaults.
 
+### Selecting columns
+
+A [PropertyFunctions](https://github.com/oschulz/PropertyFunctions.jl)
+selection returns an [`LH5TypedTable`](@ref): a lazy table of the selected
+columns under the names given to them, with the row type fixed when the
+selection is made:
+
+```julia
+using PropertyFunctions
+
+lh5open("events.lh5") do lhd
+    evt = lhd["evt"]
+    sel = (@pf (e = $energy, no = $evtno)).(evt)  # an LH5TypedTable
+    eltype(sel)                                   # a concrete NamedTuple type
+    for row in sel                                # rows are read in blocks
+        row.e
+    end
+end
+```
+
+Nested paths such as `$geds.energy` select from nested tables. The row type
+and the types of the columns of a block of rows come from the first file, so
+rows read with a range or an index vector, iteration and `filterby` have
+inferable types. The columns of a typed table, `sel.e`, are the lazy columns
+of the table it selects from.
+
 ### Joining and concatenating tables
 
 `innermerge` from PropertyFunctions joins lazy tables column by column, and
 `vcat` concatenates them row by row, both without reading anything:
 
 ```julia
-using PropertyFunctions
-
 lh5open("events.lh5") do lhd
     evt = lhd["evt"]
     twice = vcat(evt, evt)                                     # an LH5ChainedTable
@@ -124,8 +148,8 @@ does, and opens it when it is used. The tables must have the same length,
 which is compared when the length of the join is needed. A chained table
 reads rows from the parts that hold them and concatenates columns lazily.
 `ArraysOfArrays.vecflattened` chains a vector of tables as well.
-`Tables.materializer` of a lazy table, which named PropertyFunctions
-selections use, wraps the given columns without reading them.
+`Tables.materializer` of a lazy table wraps the given columns without
+reading them.
 
 `append!` refuses joined and chained tables. Writing to a column of a joined
 table writes to the table it comes from, while the columns of a chained table
@@ -256,8 +280,9 @@ Version 0.2 reads tables as [`LH5LazyTable`](@ref)s instead of TypedTables
 `tbl[:]` and indexing with a range return a `StructArray` rather than a `Table`,
 and `TypedTables.Table(tbl)` gives a `Table` of the lazy columns again.
 TypedTables is no longer a dependency, and `StructArray(tbl)` is not supported.
-Joins with `innermerge` and named PropertyFunctions selections return lazy
-tables, as before.
+Joins with `innermerge` return lazy tables, as before. Named PropertyFunctions
+selections return [`LH5TypedTable`](@ref)s, lazy tables with a fixed row type,
+where 0.1 returned `Table`s of the lazy columns.
 
 `LH5Array` is now a DiskArray: broadcasts over it are lazy and read when
 collected or written, while `map` is eager. [`add_entries!`](@ref) takes the

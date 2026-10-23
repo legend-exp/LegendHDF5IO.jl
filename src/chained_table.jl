@@ -14,7 +14,7 @@ lazily, which opens the column in each part. The parts must have the same
 columns, and rows take the column order of the first part. Chained tables
 and their columns are read-only.
 """
-struct LH5ChainedTable <: AbstractLH5Table
+struct LH5ChainedTable <: AbstractLH5Table{NamedTuple}
     parts::Vector{Any}
     colnames::Vector{Symbol}
     lengths::Vector{Int}
@@ -40,6 +40,8 @@ _part_length(tbl::Union{AbstractLH5Table, _MemoryTable}) = length(tbl)
 _is_subtable(tbl::Union{AbstractLH5Table, _MemoryTable}, name::Symbol) =
     getproperty(tbl, name) isa Union{AbstractLH5Table, _MemoryTable}
 _subpart(tbl::Union{AbstractLH5Table, _MemoryTable}, name::Symbol) = getproperty(tbl, name)
+# A column of a chain would be concatenated over every part to look at it:
+_is_subtable(tbl::LH5ChainedTable, name::Symbol) = _is_subtable(first(_chain_parts(tbl)), name)
 _part_colnames(tbl::_MemoryTable) = collect(Symbol, propertynames(tbl))
 _part_column(tbl::_MemoryTable, name::Symbol) = getproperty(tbl, name)
 _select(tbl::_MemoryTable, names) = StructArray(NamedTuple{(names...,)}(map(name -> getproperty(tbl, name), (names...,))))
@@ -68,8 +70,9 @@ function _chain_tables(tbls::AbstractVector)
     _chained(parts, names, lengths)
 end
 
-# Lengths are found part by part, as far as they are needed:
-function _part_length(tbl::LH5ChainedTable, k::Integer)
+# Lengths are found part by part, as far as they are needed. The parts are
+# of any type, so the count is asserted for the iteration state's sake:
+function _part_length(tbl::LH5ChainedTable, k::Integer)::Int
     part = _chain_parts(tbl)[k]
     _fixed_part(part) || return _part_length(part)
     lengths = getfield(tbl, :lengths)

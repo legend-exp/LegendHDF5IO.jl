@@ -15,7 +15,7 @@ has it, and the columns are ordered by their first occurrence, as in `merge`.
 `append!` refuses joined tables. Their columns are those of the parts, so
 writing to a column writes to its part.
 """
-struct LH5JoinedTable{P<:Tuple} <: AbstractLH5Table
+struct LH5JoinedTable{P<:Tuple} <: AbstractLH5Table{NamedTuple}
     parts::P
     colnames::Vector{Symbol}
     owners::Vector{Int}
