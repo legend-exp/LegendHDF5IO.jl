@@ -8,10 +8,12 @@ The columns of several tables side by side, without reading them.
 `Tables.materializer` of a lazy table when given columns that read from
 disk.
 
-The parts are lazy tables or `NamedTuple`s of columns, of equal length. A
-column comes from the last part that has it, and the columns are ordered by
-their first occurrence, as in `merge`. `append!` refuses joined tables. Their
-columns are those of the parts, so writing to a column writes to its part.
+The parts are lazy tables or `NamedTuple`s of columns. They must have the
+same length, which is compared when the length of the join is needed, so
+joining chained tables opens no file. A column comes from the last part that
+has it, and the columns are ordered by their first occurrence, as in `merge`.
+`append!` refuses joined tables. Their columns are those of the parts, so
+writing to a column writes to its part.
 """
 struct LH5JoinedTable{P<:Tuple} <: AbstractLH5Table
     parts::P
@@ -24,9 +26,6 @@ struct LH5JoinedTable{P<:Tuple} <: AbstractLH5Table
             i = findfirst(==(name), names)
             isnothing(i) ? (push!(names, name); push!(owners, k)) : (owners[i] = k)
         end
-        lengths = mapreduce(_part_lengths, vcat, parts; init = Int[])
-        allequal(lengths) || throw(DimensionMismatch(
-            "Tables to join differ in length: $(join(unique(lengths), ", "))"))
         new{typeof(parts)}(parts, names, owners)
     end
 end
@@ -36,9 +35,6 @@ _part_colnames(cols::NamedTuple) = collect(Symbol, keys(cols))
 
 _part_column(tbl::AbstractLH5Table, name::Symbol) = getproperty(tbl, name)
 _part_column(cols::NamedTuple, name::Symbol) = getfield(cols, name)
-
-_part_lengths(tbl::AbstractLH5Table) = [length(tbl)]
-_part_lengths(cols::NamedTuple) = Int[length(col) for col in values(cols)]
 
 # Lazy tables and NamedTuples of columns join as they are, other tables with their columns:
 _join_part(tbl::AbstractLH5Table) = tbl
@@ -67,13 +63,16 @@ _owned_lengths(tbl::AbstractLH5Table, ::Any) = [length(tbl)]
 _owned_lengths(cols::NamedTuple, names) = [length(getfield(cols, name)) for name in names]
 
 # Each part reads the rows of the columns it provides, as they are now, which
-# for a chained table touches only the files that hold them. The parts must
-# still agree in length, or rows of different events would pair up:
+# for a chained table touches only the files that hold them. The lengths of
+# the parts are compared by `length`, not here, so that no file is opened for
+# rows that are not read:
 function _getindex_rows(tbl::LH5JoinedTable, idxs)
-    length(tbl)
     sel = idxs isa AbstractVector{Bool} ? _materialize(idxs) : idxs
     parts, owners, names = _join_parts(tbl), getfield(tbl, :owners), _table_colnames(tbl)
     rows = Dict(k => _join_rows(_select(parts[k], names[owners .== k]), sel) for k in unique(owners))
+    lengths = unique(map(length, values(rows)))
+    length(lengths) <= 1 || throw(DimensionMismatch(
+        "The tables of the join differ in length: $(join(lengths, ", "))"))
     StructArray(NamedTuple{(names...,)}(map((name, k) -> getproperty(rows[k], name), (names...,), Tuple(owners))))
 end
 

@@ -1255,7 +1255,10 @@ struct AboveHalf end
                 @test Tables.materializer(ta)(ta) === ta
                 jn = innermerge(lhd["n"], (q = x,))
                 @test jn.sub isa LH5LazyTable && jn[2].sub.w == x[2]
-                @test_throws DimensionMismatch innermerge(ta, lhd["c"])
+                # lengths are compared when the length is needed, not when joining:
+                jc = innermerge(ta, lhd["c"])
+                @test jc isa LH5JoinedTable
+                @test_throws DimensionMismatch length(jc)
                 @test_throws ArgumentError append!(j, rows[1:1])
                 (j, rows)
             end
@@ -1302,9 +1305,10 @@ struct AboveHalf end
                 append!(tb, StructArray((x = [10],)))
                 @test_throws DimensionMismatch length(k)
                 @test_throws DimensionMismatch k[:]
-                @test_throws DimensionMismatch k[2:3]
-                @test_throws DimensionMismatch k[1]
-                @test_throws DimensionMismatch k[[1, 3]]
+                @test_throws DimensionMismatch collect(k)
+                # rows that all tables have are read without comparing lengths:
+                @test k[2:3].x == [6, 9] && k[1].y == 7 && k[[1, 3]].x == [5, 9]
+                @test_throws BoundsError k[1:4]
             end
             lh5open(fn, "r") do lhd
                 # innermerge opens the columns of the joined tables when they are used:
@@ -1640,10 +1644,13 @@ struct AboveHalf end
                 t = fc["t"]
                 @test t.sub.chained_z[:] == [10, 20] && t[:].sub.chained_z == [10, 20]
             end
-            # a join of chains reads the files that hold the rows:
-            lh5open(fns; max_open = 2) do fc
+            # a join of chains opens no file to compare lengths, and reads the files that hold the rows:
+            lh5open(fns; max_open = 1) do fc
                 j = innermerge(fc["t"], fc["u"])
+                @test collect(keys(fc.files)) == [1]
                 @test j[1:2].y == ys[1:2] && j[1:2].x == xs[1:2]
+                @test collect(keys(fc.files)) == [1]
+                @test length(j) == sum(ns)
                 @test !any(((k, path),) -> occursin("/v", path) || occursin("/sub", path), fc.checked)
             end
             # reading some columns of a file does not hide the others from later reads:

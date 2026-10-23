@@ -120,11 +120,12 @@ end
 ```
 
 A joined table takes each column from the last table that has it, as `merge`
-does, and opens it when it is used. A chained table reads rows from the parts
-that hold them and concatenates columns lazily. `ArraysOfArrays.vecflattened`
-chains a vector of tables as well. `Tables.materializer` of a lazy table,
-which named PropertyFunctions selections use, wraps the given columns without
-reading them.
+does, and opens it when it is used. The tables must have the same length,
+which is compared when the length of the join is needed. A chained table
+reads rows from the parts that hold them and concatenates columns lazily.
+`ArraysOfArrays.vecflattened` chains a vector of tables as well.
+`Tables.materializer` of a lazy table, which named PropertyFunctions
+selections use, wraps the given columns without reading them.
 
 `append!` refuses joined and chained tables. Writing to a column of a joined
 table writes to the table it comes from, while the columns of a chained table
