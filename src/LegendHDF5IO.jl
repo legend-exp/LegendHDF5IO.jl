@@ -3,7 +3,6 @@
 module LegendHDF5IO
 
 using ArraysOfArrays
-using ElasticArrays
 using EncodedArrays
 using LegendDataTypes
 using RadiationDetectorSignals
@@ -13,30 +12,80 @@ using StructArrays
 using Tables
 using Unitful
 
+import DataAPI
+import DiskArrays
 import HDF5
-import TypedTables
-using Tables: columns
-using TypedTables: Table
 using LegendDataTypes: readdata, writedata, getunits, setunits!,
     units_from_string, units_to_string,
     read_from_properties, write_to_properties!
 using RadiationDetectorSignals: RealQuantity, ArrayOfRDWaveforms
 
 import H5Zzstd
+using Preferences: @load_preference
+using PrecompileTools: @setup_workload, @compile_workload
 
 
 include("generic_io.jl")
 include("radsig_io.jl")
 include("geant4_hdf5.jl")
 include("histogram_io.jl")
+include("lazy_table.jl")
+include("joined_table.jl")
+include("chained_table.jl")
 include("types.jl")
+include("file_chain.jl")
+include("typed_table.jl")
 
 const _datatype_dict = Dict{String,Type}()
+const _datatype_names = Vector{Pair{Type,String}}()
 
-function __init__()
-    _datatype_dict[_sort_datatype_fields(datatype_to_string(EventType))] = EventType
+function _register_builtin_datatypes!()
+    register_datatype!(EventType)
+    register_datatype!(DAQType)
     _datatype_dict[_sort_datatype_fields("table{t0,dt,values}")] = Vector{<:RDWaveform}
     _datatype_dict[_sort_datatype_fields("struct{binning,weights,isdensity}")] = Histogram
+    nothing
+end
+
+function __init__()
+    scatter_bulk_max_bytes[] = @load_preference("scatter_bulk_max_bytes", nothing)
+    scatter_bulk_max_waste[] = @load_preference("scatter_bulk_max_waste", nothing)
+    _register_builtin_datatypes!()
+end
+
+
+# Reading and writing an LH5 file exercises most of the package, so
+# precompiling it removes the bulk of the latency of the first read:
+@setup_workload begin
+    _register_builtin_datatypes!()
+    tbl = StructArrays.StructArray((
+        evtno = collect(Int32(1):Int32(4)),
+        energy = rand(4) .* u"keV",
+        flag = rand(Bool, 4),
+        wf = VectorOfSimilarVectors(rand(UInt16, 8, 4)),
+        vov = VectorOfVectors([rand(Float32, 3) for _ in 1:4]),
+    ))
+    wfs = ArrayOfRDWaveforms((
+        fill(range(0.0u"μs", 1.0u"μs", length = 8), 4),
+        VectorOfSimilarVectors(rand(UInt16, 8, 4)),
+    ))
+    @compile_workload begin
+        mktempdir() do dir
+            path = joinpath(dir, "precompile.lh5")
+            lh5open(path, "cw") do lhd
+                lhd["tbl"] = tbl
+                lhd["wfs"] = wfs
+            end
+            lh5open(path) do lhd
+                t = lhd["tbl"]
+                t[1:2]
+                t[:]
+                t.energy[[1, 3]]
+                sum(t.energy)
+                lhd["wfs"][1:2]
+            end
+        end
+    end
 end
 
 end # module
