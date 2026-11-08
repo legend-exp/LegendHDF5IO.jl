@@ -128,7 +128,13 @@ Nested paths such as `$geds.energy` select from nested tables, and only the
 selected columns are read. The row type and the types of the columns of a
 block of rows come from the first file, so rows read with a range or an index
 vector, iteration and `filterby` have inferable types. The columns of a typed
-table, `sel.e`, are the lazy columns of the table it selects from.
+table, `sel.e`, are the lazy columns of the table it selects from, while a
+nested table, `sel.geds`, is a typed table of its selected columns, whose type
+follows from the type of `sel`, so `sel.geds.<TAB>` completes in the REPL. A
+function broadcast over a typed table, `(@pf $e^2).(sel)`, returns an
+[`LH5LazyBroadcast`](@ref): a lazy vector that reads the rows it needs and
+applies the function to them block by block, with the element type inferred
+from the row type, so the broadcast has an inferable type as well.
 
 ### Joining and concatenating tables
 

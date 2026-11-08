@@ -150,23 +150,27 @@ _read_rows(tbl::LH5ChainedTable, k::Integer, idxs) =
 _concat_rows(blocks::AbstractVector) = length(blocks) == 1 ? only(blocks) :
     _chain_like(first(blocks), blocks)
 
-_getindex_rows(tbl::LH5ChainedTable, ::Colon) = _concat_rows(map(eachindex(_chain_parts(tbl))) do k
+# `f` is applied to the rows of each part before they are concatenated, so
+# that typed tables convert each part to the column types of the first:
+_getindex_rows(tbl::LH5ChainedTable, idxs) = _getindex_rows(identity, tbl, idxs)
+
+_getindex_rows(f, tbl::LH5ChainedTable, ::Colon) = _concat_rows(map(eachindex(_chain_parts(tbl))) do k
     rows = _read_rows(tbl, k, :)
     length(rows) == _part_length(tbl, k) || throw(DimensionMismatch(
         "The columns of part $k differ in length"))
-    rows
+    f(rows)
 end)
 
-function _getindex_rows(tbl::LH5ChainedTable, mask::AbstractVector{Bool})
+function _getindex_rows(f, tbl::LH5ChainedTable, mask::AbstractVector{Bool})
     m = _materialize(mask)
     checkbounds(tbl, m)
-    _getindex_rows(tbl, findall(m))
+    _getindex_rows(f, tbl, findall(m))
 end
 
 # The indices are grouped by part, so that each part reads its rows at once,
 # and the rows are put back into the order of `idxs` afterwards:
-function _getindex_rows(tbl::LH5ChainedTable, idxs::AbstractVector{<:Integer})
-    isempty(idxs) && return _read_rows(tbl, 1, Int[])
+function _getindex_rows(f, tbl::LH5ChainedTable, idxs::AbstractVector{<:Integer})
+    isempty(idxs) && return f(_read_rows(tbl, 1, Int[]))
     lo, hi = extrema(idxs)
     ends = _part_ends(tbl, hi)
     lo >= 1 && hi <= last(ends) || throw(BoundsError(tbl, idxs))
@@ -178,7 +182,7 @@ function _getindex_rows(tbl::LH5ChainedTable, idxs::AbstractVector{<:Integer})
     while start <= lastindex(ks_sorted)
         k = ks_sorted[start]
         stop = something(findnext(!=(k), ks_sorted, start), lastindex(ks_sorted) + 1) - 1
-        push!(blocks, _read_rows(tbl, k, idxs_sorted[start:stop] .- (k == 1 ? 0 : ends[k - 1])))
+        push!(blocks, f(_read_rows(tbl, k, idxs_sorted[start:stop] .- (k == 1 ? 0 : ends[k - 1]))))
         start = stop + 1
     end
     rows = _concat_rows(blocks)
