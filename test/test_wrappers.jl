@@ -455,6 +455,25 @@ struct AboveHalf end
                 @test collect(view(S2, trues(3, 3))) == 1:9
                 @test sum(view(S2, [CartesianIndex(1, 1), CartesianIndex(3, 3)])) == 10
                 @test collect(view(X, 1:0) .+ 1u"keV") == Float32[] * u"keV"
+                # DiskArrays gives concatenations with zero-length parts the wrong length, so they are refused:
+                Sm = lhd["small"]
+                @test vcat(Sm, Sm)[:] == [1, 2, 3, 1, 2, 3]
+                @test hcat(S2, S2)[:, :] == hcat(S2[:, :], S2[:, :])
+                @test cat(Sm, Sm; dims = 1)[:] == [1, 2, 3, 1, 2, 3]
+                @test cat([0f0], Sm; dims = 1)[:] == [0, 1, 2, 3]
+                @test cat(S2, S2; dims = 3)[:, :, :] == cat(S2[:, :], S2[:, :]; dims = 3)
+                @test_throws ArgumentError vcat(E, Sm)
+                @test_throws ArgumentError vcat(Sm, E)
+                @test_throws ArgumentError hcat(S2, lhd["empty2d"])
+                @test_throws ArgumentError cat(Sm, E; dims = 1)
+                @test_throws ArgumentError cat(E, Sm, Sm; dims = 1)
+                # also among views and other disk arrays, while non-empty mixes concatenate:
+                @test vcat(Sm, view(Sm, 1:2))[:] == [1, 2, 3, 1, 2]
+                @test hcat(view(S2, :, 1:2), S2)[:, :] == hcat(S2[:, 1:2], S2[:, :])
+                @test_throws ArgumentError vcat(E, view(Sm, :))
+                @test_throws ArgumentError vcat(view(Sm, :), E)
+                @test_throws ArgumentError hcat(view(S2, :, :), lhd["empty2d"])
+                @test_throws ArgumentError cat(view(Sm, :), E; dims = 1)
                 V = lhd["vov_e"]
                 @test collect(V[2]) == Float32[]
                 @test V[2] == Float32[] && V[[1, 2]] == [Float32[1, 2], Float32[]]
