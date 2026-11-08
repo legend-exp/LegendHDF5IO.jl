@@ -37,12 +37,13 @@ mutable struct _OpenFile
 end
 
 """
-    lh5open(filenames::AbstractVector{<:AbstractString}; max_open::Integer = 64)
+    lh5open(filenames::AbstractVector{<:AbstractString}; max_open::Integer = LegendHDF5IO.max_open[])
 
 Open the LEGEND HDF5 files `filenames`, which must have the same structure,
-as one [`LH5FileChain`](@ref), for reading.
+as one [`LH5FileChain`](@ref), for reading. At most `max_open` of them stay
+open at a time, by default the setting [`LegendHDF5IO.max_open`](@ref).
 """
-function lh5open(filenames::AbstractVector{<:AbstractString}; max_open::Integer = 64)
+function lh5open(filenames::AbstractVector{<:AbstractString}; max_open::Integer = LegendHDF5IO.max_open[])
     isempty(filenames) && throw(ArgumentError("No files to open"))
     max_open >= 1 || throw(ArgumentError("max_open must be at least 1"))
     # Files are reopened later, maybe from another working directory:

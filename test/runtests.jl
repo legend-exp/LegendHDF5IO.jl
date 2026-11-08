@@ -10,5 +10,6 @@ Test.@testset verbose=true "Package LegendHDF5IO" begin
     include("test_geant4.jl")
     include("histograms/histogram_io.jl")
     include("test_wrappers.jl")
+    include("test_settings.jl")
     include("test_docs.jl")
 end # testset

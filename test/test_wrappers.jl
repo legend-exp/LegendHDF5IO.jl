@@ -11,6 +11,7 @@ using LegendDataTypes: RadwareSigcompress
 using Measurements
 using PropertyFunctions
 using RadiationDetectorSignals
+using ScopedSettings
 using StaticArrays
 using StatsBase
 using StructArrays
@@ -66,12 +67,8 @@ struct AboveHalf end
                     @test lhd["boolarray"][:] == expected
                     @test lhd["boolarray"][3:4] == expected[3:4]
                     @test Array(lhd["boolarray"]) == expected
-                    saved = LegendHDF5IO.scatter_bulk_max_bytes[], LegendHDF5IO.scatter_bulk_max_waste[]
-                    LegendHDF5IO.scatter_bulk_max_bytes[] = LegendHDF5IO.scatter_bulk_max_waste[] = 0
-                    try
+                    @with LegendHDF5IO.scatter_bulk_max_bytes => 0 LegendHDF5IO.scatter_bulk_max_waste => 0 begin
                         @test lhd["boolarray"][[3, 4, 9]] == expected[[3, 4, 9]]
-                    finally
-                        LegendHDF5IO.scatter_bulk_max_bytes[], LegendHDF5IO.scatter_bulk_max_waste[] = saved
                     end
                 end
                 @testset "IO of Array{<:Quantity}" begin
@@ -247,23 +244,18 @@ struct AboveHalf end
                 @test LegendHDF5IO._scatter_limits(A) == LegendHDF5IO._scatter_limits(LegendHDF5IO._is_network_file(path))
                 # tuning the thresholds must not change the returned values:
                 tune = [5, 5, 900, 17, 3]
-                old_max, old_waste = LegendHDF5IO.scatter_bulk_max_bytes[],
-                    LegendHDF5IO.scatter_bulk_max_waste[]
-                try
-                    LegendHDF5IO.scatter_bulk_max_bytes[] = 0
-                    LegendHDF5IO.scatter_bulk_max_waste[] = 0
+                @with LegendHDF5IO.scatter_bulk_max_bytes => 0 LegendHDF5IO.scatter_bulk_max_waste => 0 begin
                     @test A[tune] == x[tune]
                     @test W[tune] == VectorOfSimilarVectors(data)[tune]
-                    # the waste factor need not be an integer:
-                    LegendHDF5IO.scatter_bulk_max_waste[] = 2.5
+                end
+                # the waste factor need not be an integer:
+                @with LegendHDF5IO.scatter_bulk_max_bytes => 0 LegendHDF5IO.scatter_bulk_max_waste => 2.5 begin
                     @test A[tune] == x[tune]
-                    LegendHDF5IO.scatter_bulk_max_bytes[] = typemax(Int)
+                end
+                @with LegendHDF5IO.scatter_bulk_max_bytes => typemax(Int) LegendHDF5IO.scatter_bulk_max_waste => 2.5 begin
                     @test A[tune] == x[tune]
                     @test W[tune] == VectorOfSimilarVectors(data)[tune]
                     @test LegendHDF5IO._scatter_limits(true) == (typemax(Int), 2.5)
-                finally
-                    LegendHDF5IO.scatter_bulk_max_bytes[] = old_max
-                    LegendHDF5IO.scatter_bulk_max_waste[] = old_waste
                 end
 
                 vv = VectorOfVectors([rand(rand(1:20)) for _ in 1:100])
@@ -276,13 +268,8 @@ struct AboveHalf end
                 S = lhd["strs"]
                 @test eltype(S) == String
                 @test S[[4, 1, 1]] == strs[[4, 1, 1]]
-                try
-                    LegendHDF5IO.scatter_bulk_max_bytes[] = 0
-                    LegendHDF5IO.scatter_bulk_max_waste[] = 0
+                @with LegendHDF5IO.scatter_bulk_max_bytes => 0 LegendHDF5IO.scatter_bulk_max_waste => 0 begin
                     @test S[[4, 1, 1]] == strs[[4, 1, 1]]
-                finally
-                    LegendHDF5IO.scatter_bulk_max_bytes[] = old_max
-                    LegendHDF5IO.scatter_bulk_max_waste[] = old_waste
                 end
             end
 
@@ -441,12 +428,8 @@ struct AboveHalf end
                 @test BV[:] == [[true, false], [true, true], [true, false]]
                 # variable-length numeric elements are converted on every read path:
                 VL = lhd["vl"]
-                saved = LegendHDF5IO.scatter_bulk_max_bytes[], LegendHDF5IO.scatter_bulk_max_waste[]
-                LegendHDF5IO.scatter_bulk_max_bytes[] = LegendHDF5IO.scatter_bulk_max_waste[] = 0
-                try
+                @with LegendHDF5IO.scatter_bulk_max_bytes => 0 LegendHDF5IO.scatter_bulk_max_waste => 0 begin
                     @test VL[[1, 3, 1500]] == [[1.0, 2.0], [3.0, 4.0], [1500.0, 1501.0]]
-                finally
-                    LegendHDF5IO.scatter_bulk_max_bytes[], LegendHDF5IO.scatter_bulk_max_waste[] = saved
                 end
 
                 # masks must match the axis they index:
@@ -611,14 +594,16 @@ struct AboveHalf end
                 lhd["x"] = x
                 lhd["m"] = m
                 @test HDF5.get_create_properties(lhd.data_store["x"]).chunk == (2^18,)
-                @test HDF5.get_create_properties(lhd.data_store["m"]).chunk == (50, 10485)
+                @test HDF5.get_create_properties(lhd.data_store["m"]).chunk == (50, 9363)
                 @test lhd["x"][2^18 - 1:2^18 + 1] == x[2^18 - 1:2^18 + 1]
-                @test lhd["m"][:, 10485:10486] == m[:, 10485:10486]
+                @test lhd["m"][:, 9363:9364] == m[:, 9363:9364]
             end
-            # without compression the first write still defines the chunk:
+            # without compression the first write defines the chunk up to a larger cap:
             lh5open(joinpath(tmp, "nocap.lh5"), "cw"; usechunks = true) do lhd
                 lhd["x"] = x
+                lhd["big"] = rand(UInt8, 3 * 2^24)
                 @test HDF5.get_create_properties(lhd.data_store["x"]).chunk == (2^20,)
+                @test HDF5.get_create_properties(lhd.data_store["big"]).chunk == (2^24,)
             end
         end
     end
@@ -1175,7 +1160,7 @@ struct AboveHalf end
 
             # iteration reads rows in blocks, and the blocks must join up without gaps:
             fn_long = joinpath(dir, "long.lh5")
-            m = 2 * LegendHDF5IO._rows_per_block + 7
+            m = 2 * LegendHDF5IO.rows_per_block[] + 7
             x = rand(Int32, m)
             lh5open(fn_long, "w") do lhd
                 lhd["long"] = StructArray((x = x,))

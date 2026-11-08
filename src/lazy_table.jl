@@ -196,13 +196,6 @@ function Base.getindex(tbl::AbstractLH5Table, idxs::AbstractArray)
     reshape(tbl[vec(idxs)], axes(idxs))
 end
 
-"""
-    _rows_per_block
-
-Number of rows that iteration over a lazy table reads at a time.
-"""
-const _rows_per_block = 4096
-
 _getindex_rows(tbl::AbstractLH5Table, idxs) = _getindex_columns(_typed_table(tbl), idxs)
 
 # Iteration reads rows in blocks, which keeps loops over a table from reading
@@ -216,7 +209,7 @@ _first_block_state(::AbstractLH5Table) = 1
 function _next_block(tbl::AbstractLH5Table, i::Int)
     n = length(tbl)
     i > n && return nothing
-    stop = min(i + _rows_per_block - 1, n)
+    stop = min(i + rows_per_block[] - 1, n)
     (tbl[i:stop], stop + 1)
 end
 
