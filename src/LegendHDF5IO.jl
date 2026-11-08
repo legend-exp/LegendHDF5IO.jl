@@ -36,6 +36,7 @@ include("chained_table.jl")
 include("types.jl")
 include("file_chain.jl")
 include("typed_table.jl")
+include("lazy_broadcast.jl")
 
 const _datatype_dict = Dict{String,Type}()
 const _datatype_names = Vector{Pair{Type,String}}()

@@ -16,10 +16,15 @@ is known.
 Rows are read from the selected columns only. Blocks of rows take the column
 types of the first part of a chain and convert those of the other parts, and
 a value that does not fit throws. The columns, `sel.e`, are the lazy columns
-of the table selected from. `append!` refuses typed tables.
+of the table selected from, and a nested table, `sel.geds`, is a typed table
+of its selected columns whose type follows from the type of `sel`. A function
+broadcast over a typed table, `f.(sel)`, is an [`LH5LazyBroadcast`](@ref).
+`append!` refuses typed tables.
 """
-struct LH5TypedTable{R<:NamedTuple, B<:StructArray{R, 1}, T<:AbstractLH5Table} <: AbstractLH5Table{R}
-    table::T
+# The type of the table selected from is not a parameter, so that the type of
+# a selection and of its nested tables follows from the row and block types:
+struct LH5TypedTable{R<:NamedTuple, B<:StructArray{R, 1}} <: AbstractLH5Table{R}
+    table::AbstractLH5Table
     paths::Vector{Tuple{Vararg{Symbol}}}
 end
 
@@ -33,7 +38,7 @@ function LH5TypedTable(tbl::AbstractLH5Table, names::NTuple{N, Symbol}, paths::N
     allunique(names) || throw(ArgumentError("Selected column names are not unique: $(join(names, ", "))"))
     projected = _select(tbl, _selection_tree(paths))
     block = _block_columns(_pick_columns(projected[1:0], names, paths))
-    LH5TypedTable{eltype(block), typeof(block), typeof(projected)}(projected, collect(paths))
+    LH5TypedTable{eltype(block), typeof(block)}(projected, collect(paths))
 end
 
 # The columns at `paths` as a name tree (see `_select`): a name for a column
@@ -60,7 +65,22 @@ end
 
 Base.propertynames(::LH5TypedTable{R}) where {R} = fieldnames(R)
 _table_colnames(::LH5TypedTable{R}) where {R} = collect(Symbol, fieldnames(R))
-_column(tbl::LH5TypedTable, name::Symbol) = foldl(getproperty, _column_path(tbl, name); init = _typed_parent(tbl))
+# Whether a column is a nested table follows from the block type, so a typed
+# sub-table has an inferable type and `sel.sub.<TAB>` completes:
+@inline function _column(tbl::LH5TypedTable, name::Symbol)
+    path = _column_path(tbl, name)
+    _is_subtable(tbl, name) ? _typed_subtable(tbl, name, path) : foldl(getproperty, path; init = _typed_parent(tbl))
+end
+
+# A sub-table selects its columns from the table underneath, so reading it
+# touches no other column of the selection. Its type follows from the name
+# only when inference propagates the name as a constant, which it does not do
+# here by default:
+Base.@constprop :aggressive function _typed_subtable(tbl::LH5TypedTable{R, B}, name::Symbol, path) where {R, B}
+    SB = _block_column_type(B, name)
+    paths = [(path..., sub) for sub in fieldnames(eltype(SB))]
+    LH5TypedTable{eltype(SB), SB}(_select(_typed_parent(tbl), _selection_tree(paths)), paths)
+end
 
 Base.length(tbl::LH5TypedTable) = length(_typed_parent(tbl))
 Base.isempty(tbl::LH5TypedTable) = isempty(_typed_parent(tbl))
@@ -85,11 +105,21 @@ _block_columns(rows::StructArray{<:NamedTuple}) = StructArray(map(_block_columns
 _typed_block(tbl::LH5TypedTable{R, B}, rows::StructArray) where {R, B} =
     _conform_block(_block_columns(_pick_columns(rows, fieldnames(R), Tuple(getfield(tbl, :paths)))), B)::B
 
-_getindex_rows(tbl::LH5TypedTable, idxs) = _typed_block(tbl, _typed_parent(tbl)[idxs])
+_getindex_rows(tbl::LH5TypedTable{R, B}, idxs) where {R, B} = _read_typed(tbl, _typed_parent(tbl), idxs)::B
 
-# The iteration state of a typed table wraps that of the table it selects from:
-struct _TypedState{S}
-    state::S
+# The parts of a chain are converted one by one, since promoting their
+# columns to a common type first, like Int64 and Float64 to Float64, could
+# lose values that fit the type of the first part:
+_read_typed(tbl::LH5TypedTable, parent::AbstractLH5Table, idxs) = _typed_block(tbl, parent[idxs])
+_read_typed(tbl::LH5TypedTable, parent::LH5ChainedTable, idxs) =
+    _conform_block(_getindex_rows(rows -> _typed_block(tbl, rows), parent, idxs), _block_type(tbl))
+
+_block_type(::LH5TypedTable{R, B}) where {R, B} = B
+
+# The iteration state of a typed table wraps that of the table it selects
+# from, whose type is not part of the typed table's type:
+struct _TypedState
+    state::Any
 end
 
 _first_block_state(tbl::LH5TypedTable) = _TypedState(_first_block_state(_typed_parent(tbl)))
@@ -127,7 +157,7 @@ function _select(tbl::LH5TypedTable{R, B}, tree) where {R, B}
     leaves = [(path..., leaf...) for (path, entry) in zip(paths, entries) for leaf in _entry_leaves(entry)]
     projected = _select(_typed_parent(tbl), _selection_tree(leaves))
     block = _block_type(B, entries)
-    LH5TypedTable{eltype(block), block, typeof(projected)}(projected, collect(paths))
+    LH5TypedTable{eltype(block), block}(projected, collect(paths))
 end
 
 # The paths below an entry of a selection: none for a column or a whole

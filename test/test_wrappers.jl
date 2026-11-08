@@ -1224,7 +1224,18 @@ struct AboveHalf end
                 @test [r.d for r in sel] == b && sum(r -> r.c, sel) ≈ sum(a)
                 @test Tables.schema(sel) == Tables.Schema((:c, :d), (Float32, Int32))
                 @test Tables.columns(sel) isa LH5LazyColumns && Tables.columntype(sel, :c) == Float32
-                @test (@pf $c * 2).(sel) == 2 .* a
+                # functions broadcast over typed tables block by block, with the element type known up front:
+                bc = @inferred broadcast(@pf($c * 2), sel)
+                @test bc isa LH5LazyBroadcast && eltype(bc) == Float32 && length(bc) == n
+                @test bc == 2 .* a && bc[:] == 2 .* a && @inferred(bc[2:3]) == 2 .* a[2:3] && bc[2] == 2 * a[2] && bc[[3, 1]] == 2 .* a[[3, 1]]
+                @test collect(bc) == 2 .* a && sum(bc) ≈ 2 * sum(a) && [v for v in bc] == 2 .* a
+                @test (@pf $c).(sel) === sel.c && (@pf 1).(sel) == ones(Int, n)
+                @test occursin("LH5LazyBroadcast{Float32}", sprint(show, bc))
+                # Bool broadcasts index, count and filter through bulk reads:
+                mask = (@pf $d > 0).(sel)
+                @test mask isa LH5LazyBroadcast && eltype(mask) == Bool
+                @test findall(mask) == findall(b .> 0) && count(mask) == count(b .> 0)
+                @test sel[mask] == sel[:][b .> 0] && sel.c[mask] == a[b .> 0]
                 @test filterby(@pf $d > 0)(sel) == sel[:][b .> 0]
                 @test occursin("LH5TypedTable(2 columns", sprint(show, sel))
                 @test_throws ArgumentError append!(sel, sel[1:1])
@@ -1243,6 +1254,14 @@ struct AboveHalf end
                 sw = (@pf (; $y)).(nested)
                 @test eltype(sw) <: NamedTuple{(:y,)} && sw[1:2].y == StructArray((b = b[1:2], vov = vov[1:2]))
                 @test @inferred(sw[1:2]).y isa StructArray
+                # the nested table of a selection is a typed table whose type follows from the selection:
+                swy = @inferred (s -> s.y)(sw)
+                @test swy isa LH5TypedTable && propertynames(swy) == (:b, :vov) && eltype(swy) == eltype(sw[1:0].y)
+                @test swy[:] == nested.y[:] && swy.b === nested.y.b && Tables.columns(sw).y isa LH5TypedTable
+                @test vcat(sw, sw).y[:] == vcat(nested.y[:], nested.y[:])
+                # also among several nested tables:
+                sxy = (@pf (; $x, $y)).(nested)
+                @test @inferred((s -> s.y)(sxy)) isa LH5TypedTable && @inferred((s -> s.x)(sxy))[:] == nested.x[:]
                 # selections into the nested columns of a selection, through a join and through a chain:
                 sq = (@pf (bb = $y.b, qq = $q)).(innermerge(sw, (q = collect(1:n),)))
                 @test eltype(sq) == @NamedTuple{bb::Int32, qq::Int} && sq[:] == StructArray((bb = b, qq = collect(1:n)))
@@ -1442,6 +1461,7 @@ struct AboveHalf end
                 sw = (@pf (sig = $wf.signal, b = $b)).(c)
                 @test sw[10].sig == mem[3].wf[3].signal && sw[1:2].sig == [w.signal for w in mem[1].wf[1:2]]
                 @test (@pf $x * 2).(c) == 2 .* xs
+                @test @inferred(broadcast(@pf($x * 2), (@pf (; $x)).(c))) == 2 .* xs
                 @test filterby(@pf $b > 0)(c) == rows[bs .> 0]
                 @test Tables.columns(c) isa LH5LazyColumns
                 # vecflattened and reduce(vcat, ...) chain as vcat does, and chains of chains stay flat:
@@ -1629,6 +1649,36 @@ struct AboveHalf end
         end
     end
 
+    @testset "tables across files" begin
+        mktempdir() do dir
+            # a typed selection over concatenated tables converts each part to the types of the
+            # first, without an intermediate promotion that loses precision:
+            big = Int64(2)^53 + 1
+            lh5open(lhd -> lhd["t"] = StructArray((x = [big],)), joinpath(dir, "ints.lh5"), "w")
+            lh5open(lhd -> lhd["t"] = StructArray((x = [2.0],)), joinpath(dir, "floats.lh5"), "w")
+            lh5open(joinpath(dir, "ints.lh5")) do h1
+                lh5open(joinpath(dir, "floats.lh5")) do h2
+                    s = (@pf (; $x)).(vcat(h1["t"], h2["t"]))
+                    @test eltype(s) == @NamedTuple{x::Int64}
+                    @test s[:].x == [big, 2] && s[[1, 2]].x == [big, 2] && s[1:2].x == [big, 2] && s[2:2].x == [2]
+                    @test [r.x for r in s] == [big, 2] && s[1].x == big
+                end
+            end
+            # a typed sub-table reads only its own columns, so other columns of the selection need
+            # not agree between the files of a chain:
+            fns = [joinpath(dir, "n$k.lh5") for k in 1:2]
+            lh5open(lhd -> lhd["nested"] = StructArray((sub = StructArray((x = [1.0, 2.0],)), other = [1, 2])), fns[1], "w")
+            lh5open(lhd -> lhd["nested"] = StructArray((sub = StructArray((x = [3.0],)), other = ["a"])), fns[2], "w")
+            lh5open(fns) do fc
+                s = (@pf (; $sub, $other)).(fc["nested"])
+                @test @inferred((t -> t.sub)(s)) isa LH5TypedTable
+                @test s.sub[:].x == [1.0, 2.0, 3.0] && s.sub.x[:] == [1.0, 2.0, 3.0]
+                @test_throws ArgumentError s[:]
+                # a function broadcast over the selection reads only the columns it uses:
+                @test @inferred(broadcast(@pf($sub.x * 2), s)) == [2.0, 4.0, 6.0]
+            end
+        end
+    end
     @testset "file chains" begin
         mktempdir() do dir
             ns = (4, 0, 5, 3, 6)
@@ -1748,12 +1798,14 @@ struct AboveHalf end
             # a selection over a file chain opens the first file only, and fixes the row type there:
             lh5open(fns; max_open = 1) do fc
                 s = (@pf (xx = $x, c = $sub.c, v = $v)).(fc["t"])
-                @test collect(keys(fc.files)) == [1] && isempty(fc.checked)
+                bcs = @inferred broadcast(@pf($xx + 1), s)
+                @test bcs isa LH5LazyBroadcast && collect(keys(fc.files)) == [1] && isempty(fc.checked)
                 @test eltype(s) == @NamedTuple{xx::Float32, c::Float64, v::eltype(mem[1].v)}
                 cs_all = joined(t -> t.sub.c)
                 @test @inferred(s[1:3]) == StructArray((xx = xs[1:3], c = cs_all[1:3], v = mem[1].v[1:3]))
                 @test collect(keys(fc.files)) == [1]
                 @test [r.xx for r in s] == xs && s[:].c == cs_all && collect(s[:].v) == joined(t -> t.v)
+                @test bcs == xs .+ 1
                 @test s[[10, 2]].xx == xs[[10, 2]] && length(s) == sum(ns) && !isempty(s)
                 @test s.xx[:] == xs && s.xx isa DiskArrays.AbstractDiskArray
                 @test Tables.schema(s).names == (:xx, :c, :v)

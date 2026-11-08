@@ -1,6 +1,7 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
-export LHDataStore, LH5FileChain, LH5Array, AbstractLH5Table, LH5LazyTable, LH5JoinedTable, LH5ChainedTable, LH5TypedTable, LH5LazyColumns
+export LHDataStore, LH5FileChain, LH5Array, AbstractLH5Vector, AbstractLH5Table, LH5LazyTable, LH5JoinedTable, LH5ChainedTable,
+    LH5TypedTable, LH5LazyColumns, LH5LazyBroadcast
 
 """
     LH5Array{T, N} <: AbstractArray{T, N}
@@ -813,7 +814,7 @@ _materialize(A::ArrayOfSimilarArrays{T, M}) where {T, M} =
 _materialize(x::NamedTuple) = map(_materialize, x)
 _materialize(A::StructArray{<:NamedTuple}) =
     StructArray(map(_materialize, StructArrays.components(A)))
-_materialize(tbl::AbstractLH5Table) = _materialize(tbl[:])
+_materialize(v::AbstractLH5Vector) = _materialize(v[:])
 _materialize(A::ArrayOfRDWaveforms) =
     ArrayOfRDWaveforms((_materialize(A.time), _materialize(A.signal)))
 _materialize(A::VectorOfEncodedArrays{T}) where {T} =

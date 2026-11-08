@@ -1,7 +1,29 @@
 # This file is a part of LegendHDF5IO.jl, licensed under the MIT License (MIT).
 
 """
-    AbstractLH5Table{R<:NamedTuple} <: AbstractVector{R}
+    AbstractLH5Vector{T} <: AbstractVector{T}
+
+Supertype of the lazy vectors of LH5 data, which read their elements in
+blocks: the lazy tables, [`AbstractLH5Table`](@ref), and lazy broadcasts over
+typed tables, [`LH5LazyBroadcast`](@ref).
+
+Indexing with a range, index vector or mask reads the selected elements, and
+`v[:]` reads them all. Iteration reads the elements in blocks of a few
+thousand (see [`LegendHDF5IO.rows_per_block`](@ref)), so loops,
+comprehensions and `map` read neither one element at a time nor everything at
+once. `filter`, `findall` and reductions go through iteration, while `sort`
+and `sortperm` read the vector first.
+
+# Implementation
+
+Subtypes implement `length(v)` and `_getindex_rows(v, idxs)`, which reads the
+elements at `idxs`, and may specialize the block iteration,
+`_first_block_state(v)` and `_next_block(v, state)`.
+"""
+abstract type AbstractLH5Vector{T} <: AbstractVector{T} end
+
+"""
+    AbstractLH5Table{R<:NamedTuple} <: AbstractLH5Vector{R}
 
 Supertype of the lazy tables of LH5 data: [`LH5LazyTable`](@ref),
 [`LH5JoinedTable`](@ref), [`LH5ChainedTable`](@ref) and
@@ -18,11 +40,8 @@ tables.
 
 Treating the table as an array opens all columns. Indexing with a range,
 index vector or mask reads the selected rows into a `StructArray`, and
-`tbl[:]` reads the whole table. Iteration reads the rows in blocks of a few
-thousand, so loops, comprehensions and `map` read neither one row at a time
-nor everything at once. `filter`, `findall` and reductions go through
-iteration, while `sort` and `sortperm` read the table first. `vcat` of lazy
-tables chains them, and concatenation with other arrays is refused. So are
+iteration reads the rows in blocks, as described for
+[`AbstractLH5Vector`](@ref). `vcat` of lazy tables chains them, and concatenation with other arrays is refused. So are
 `StructArray(tbl)` and `TypedTables.Table(tbl)`: they would append through
 the columns without the table's checks, and a `StructArray` of a column read
 eagerly would slice and append rows with a stale row type.
@@ -36,7 +55,7 @@ Subtypes implement `_table_colnames(tbl)`, `_column(tbl, name)` and
 `length(tbl)`, and may specialize `_typed_table(tbl)`,
 `_getindex_rows(tbl, idxs)` and the block iteration, `_next_block`.
 """
-abstract type AbstractLH5Table{R<:NamedTuple} <: AbstractVector{R} end
+abstract type AbstractLH5Table{R<:NamedTuple} <: AbstractLH5Vector{R} end
 
 """
     LH5LazyTable <: AbstractLH5Table
@@ -184,41 +203,41 @@ function _with_object(f, store, path::AbstractString)
     end
 end
 
-Base.size(tbl::AbstractLH5Table) = (length(tbl),)
-Base.IndexStyle(::Type{<:AbstractLH5Table}) = IndexLinear()
+Base.size(v::AbstractLH5Vector) = (length(v),)
+Base.IndexStyle(::Type{<:AbstractLH5Vector}) = IndexLinear()
 
-# Selections rebuild the row type from the columns they read, and a single
-# row holds its data, where a row of the typed table would hold views:
-Base.getindex(tbl::AbstractLH5Table, i::Integer) = tbl[i:i][1]
-Base.getindex(tbl::AbstractLH5Table, ::Colon) = _getindex_rows(tbl, :)
-Base.getindex(tbl::AbstractLH5Table, idxs::AbstractVector) = _getindex_rows(tbl, idxs)
-function Base.getindex(tbl::AbstractLH5Table, idxs::AbstractArray)
-    checkbounds(tbl, idxs)
-    reshape(tbl[vec(idxs)], axes(idxs))
+# A single element is read as a block of one, so a row of a table holds its
+# data, where a row of the typed table would hold views:
+Base.getindex(v::AbstractLH5Vector, i::Integer) = v[i:i][1]
+Base.getindex(v::AbstractLH5Vector, ::Colon) = _getindex_rows(v, :)
+Base.getindex(v::AbstractLH5Vector, idxs::AbstractVector) = _getindex_rows(v, idxs)
+function Base.getindex(v::AbstractLH5Vector, idxs::AbstractArray)
+    checkbounds(v, idxs)
+    reshape(v[vec(idxs)], axes(idxs))
 end
 
 _getindex_rows(tbl::AbstractLH5Table, idxs) = _getindex_columns(_typed_table(tbl), idxs)
 
-# Iteration reads rows in blocks, which keeps loops over a table from reading
-# one row at a time and keeps their memory bounded. `_next_block(tbl, state)`
-# returns the next block of rows with the state after it, or `nothing` at the
-# end, and `_first_block_state(tbl)` the state before the first block. Tables
-# whose length is costly read part by part instead, and typed tables read the
-# blocks of the table they select from:
-_first_block_state(::AbstractLH5Table) = 1
+# Iteration reads elements in blocks, which keeps loops over a table from
+# reading one row at a time and keeps their memory bounded. `_next_block(v,
+# state)` returns the next block with the state after it, or `nothing` at the
+# end, and `_first_block_state(v)` the state before the first block. Tables
+# whose length is costly read part by part instead, and typed tables and
+# broadcasts read the blocks of the table they are made from:
+_first_block_state(::AbstractLH5Vector) = 1
 
-function _next_block(tbl::AbstractLH5Table, i::Int)
-    n = length(tbl)
+function _next_block(v::AbstractLH5Vector, i::Int)
+    n = length(v)
     i > n && return nothing
     stop = min(i + rows_per_block[] - 1, n)
-    (tbl[i:stop], stop + 1)
+    (v[i:stop], stop + 1)
 end
 
 # The state holds the current block and the position in it:
-function Base.iterate(tbl::AbstractLH5Table, state = (nothing, 0, _first_block_state(tbl)))
+function Base.iterate(v::AbstractLH5Vector, state = (nothing, 0, _first_block_state(v)))
     block, pos, next_state = state
     while isnothing(block) || pos == length(block)
-        next = _next_block(tbl, next_state)
+        next = _next_block(v, next_state)
         isnothing(next) && return nothing
         block, next_state = next
         pos = 0
@@ -229,26 +248,27 @@ end
 Base.broadcastable(tbl::AbstractLH5Table) = _typed_table(tbl)
 
 # Base copies, filters and reduces arrays by indexing them, which would read
-# one row at a time. These go through iteration or read the table at once:
-function Base.copyto!(dest::Array, src::AbstractLH5Table)
+# one element at a time. These go through iteration or read the vector at once:
+function Base.copyto!(dest::Array, src::AbstractLH5Vector)
     length(dest) < length(src) && throw(BoundsError(dest, LinearIndices(src)))
-    for (i, row) in zip(eachindex(dest), src)
-        @inbounds dest[i] = row
+    for (i, x) in zip(eachindex(dest), src)
+        @inbounds dest[i] = x
     end
     dest
 end
-Base.copyto!(dest::Array, doffs::Integer, src::AbstractLH5Table, soffs::Integer, n::Integer) =
+Base.copyto!(dest::Array, doffs::Integer, src::AbstractLH5Vector, soffs::Integer, n::Integer) =
     copyto!(dest, doffs, src[soffs:soffs + n - 1], 1, n)
-Base.copy(tbl::AbstractLH5Table) = tbl[:]
-Base.collect(tbl::AbstractLH5Table) = collect(tbl[:])
-Base.hash(tbl::AbstractLH5Table, h::UInt) = hash(tbl[:], h)
-Base.mapreduce(f, op, tbl::AbstractLH5Table; dims = :, kw...) =
-    dims === Colon() ? mapfoldl(f, op, tbl; kw...) : mapreduce(f, op, tbl[:]; dims, kw...)
-Base.findall(f::Function, tbl::AbstractLH5Table) = findall(map(f, tbl))
-Base.findall(f::Base.Fix2{typeof(in)}, tbl::AbstractLH5Table) = findall(map(f, tbl))
-Base.filter(f, tbl::AbstractLH5Table) = tbl[findall(map(f, tbl))]
-Base.sort(tbl::AbstractLH5Table; kw...) = sort(tbl[:]; kw...)
-Base.sortperm(tbl::AbstractLH5Table; kw...) = sortperm(tbl[:]; kw...)
+Base.copy(v::AbstractLH5Vector) = v[:]
+Base.collect(v::AbstractLH5Vector) = collect(v[:])
+Base.hash(v::AbstractLH5Vector, h::UInt) = hash(v[:], h)
+Base.mapreduce(f, op, v::AbstractLH5Vector; dims = :, kw...) =
+    dims === Colon() ? mapfoldl(f, op, v; kw...) : mapreduce(f, op, v[:]; dims, kw...)
+Base.findall(mask::AbstractLH5Vector{Bool}) = findall(mask[:])
+Base.findall(f::Function, v::AbstractLH5Vector) = findall(map(f, v))
+Base.findall(f::Base.Fix2{typeof(in)}, v::AbstractLH5Vector) = findall(map(f, v))
+Base.filter(f, v::AbstractLH5Vector) = v[findall(map(f, v))]
+Base.sort(v::AbstractLH5Vector; kw...) = sort(v[:]; kw...)
+Base.sortperm(v::AbstractLH5Vector; kw...) = sortperm(v[:]; kw...)
 
 # Lazy tables concatenate lazily with each other (see LH5ChainedTable). The
 # second method resolves the ambiguity with the guards below:
