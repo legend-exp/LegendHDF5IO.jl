@@ -100,8 +100,8 @@ the events themselves. The thresholds for that choice,
 [`LegendHDF5IO.scatter_bulk_max_waste`](@ref), depend on the file system by
 default: 1 MiB and a factor of 4 on local storage, 8 MiB and 16 on network
 file systems such as GPFS, NFS or Lustre, which pay per read operation. The
-file system is recognized from the mount table on Linux. Set the thresholds
-to override the defaults.
+file system is recognized from the mount table on Linux. Both are
+[settings](@ref Settings).
 
 ### Selecting columns
 
@@ -170,8 +170,8 @@ lh5open(["run1.lh5", "run2.lh5", "run3.lh5"]) do files
 end
 ```
 
-Files are opened when they are read from, and at most `max_open` of them (64
-by default) stay open. The first file defines the structure: column names,
+Files are opened when they are read from, and at most `max_open` of them stay
+open, by default the setting [`LegendHDF5IO.max_open`](@ref), 64. The first file defines the structure: column names,
 datatypes, units, codecs, element types and inner sizes. Another file is
 checked against it when a column is first read from it, so the files need to
 agree only on what is read. A difference throws an `ArgumentError` that names
@@ -189,7 +189,11 @@ lh5open("events_chunked.lh5", "cw", usechunks = true) do lhd
 end
 ```
 
-The first array written to a dataset sets its chunk size. Appends are not
+The first array written to a dataset sets its chunk size, up to the setting
+[`LegendHDF5IO.max_chunk_bytes`](@ref) (16 MiB): a larger first write is split
+evenly into chunks of at most that size. Uncompressed chunks are stored in
+full, so an append that does not fill its last chunk wastes at most one
+chunk. Appends are not
 transactional: one that fails midway, for example because a value cannot be
 converted to the element type of a column, leaves the columns it has already
 extended longer than the others.
@@ -197,8 +201,10 @@ extended longer than the others.
 With `compress = :zstd` (or `true`), array datasets are Zstandard-compressed,
 and `compress = :deflate` uses shuffle plus deflate for maximum portability.
 Compressed datasets are always chunked, so `append!` works on them as well,
-and their chunks are capped at 1 MiB, since a partial read decompresses whole
-chunks.
+and their chunks are capped at [`LegendHDF5IO.max_compressed_chunk_bytes`](@ref)
+(1 MiB), since a partial read decompresses whole chunks. The defaults of
+`usechunks` and `compress` are the settings [`LegendHDF5IO.usechunks`](@ref)
+and [`LegendHDF5IO.compress`](@ref).
 
 ### Modifying structure
 
@@ -219,6 +225,53 @@ read with [`Geant4HDF5Input`](@ref):
 
 ```julia
 hits = open(read, "simulation.hdf5", Geant4HDF5Input)
+```
+
+## Settings
+
+The defaults of `lh5open`'s `usechunks` and `compress` arguments and of the
+`max_open` of file chains, the chunk size caps, the thresholds of scattered
+reads and the number of rows that iteration reads at a time are settings, as
+[ScopedSettings](https://github.com/oschulz/ScopedSettings.jl) defines them:
+
+| Setting | Default |
+|:--|:--|
+| [`LegendHDF5IO.usechunks`](@ref) | `false` |
+| [`LegendHDF5IO.compress`](@ref) | `:none` |
+| [`LegendHDF5IO.max_chunk_bytes`](@ref) | 16 MiB |
+| [`LegendHDF5IO.max_compressed_chunk_bytes`](@ref) | 1 MiB |
+| [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) | `nothing`, by file system |
+| [`LegendHDF5IO.scatter_bulk_max_waste`](@ref) | `nothing`, by file system |
+| [`LegendHDF5IO.max_open`](@ref) | 64 |
+| [`LegendHDF5IO.rows_per_block`](@ref) | 4096 |
+
+A setting is read with `setting[]`. It takes its default from the preference
+of its name in the active `LocalPreferences.toml`, and the environment
+variable `LEGENDHDF5IOJL_<NAME>` in upper case overrides that:
+
+```toml
+[LegendHDF5IO]
+compress = "zstd"
+scatter_bulk_max_bytes = "auto"
+```
+
+```sh
+export LEGENDHDF5IOJL_MAX_CHUNK_BYTES=67108864
+```
+
+The settings that may be `nothing` take the value `"auto"` for it there. A
+setting can also be set for the running session, with `setting[] = value`,
+where `setting[] = default_value` restores the default, or for a scope:
+
+```julia
+using ScopedSettings
+
+LegendHDF5IO.scatter_bulk_max_bytes[] = 2^23
+LegendHDF5IO.scatter_bulk_max_bytes[] = default_value
+
+@with LegendHDF5IO.usechunks => true LegendHDF5IO.compress => :zstd begin
+    lh5open(lhd -> lhd["evt"] = tbl, "events_compressed.lh5", "w")
+end
 ```
 
 ## Supporting custom types

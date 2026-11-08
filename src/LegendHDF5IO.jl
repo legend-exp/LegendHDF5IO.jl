@@ -21,10 +21,11 @@ using LegendDataTypes: readdata, writedata, getunits, setunits!,
 using RadiationDetectorSignals: RealQuantity, ArrayOfRDWaveforms
 
 import H5Zzstd
-using Preferences: @load_preference
 using PrecompileTools: @setup_workload, @compile_workload
+using ScopedSettings: ScopedSetting, GetPreference
 
 
+include("settings.jl")
 include("generic_io.jl")
 include("radsig_io.jl")
 include("geant4_hdf5.jl")
@@ -48,8 +49,6 @@ function _register_builtin_datatypes!()
 end
 
 function __init__()
-    scatter_bulk_max_bytes[] = @load_preference("scatter_bulk_max_bytes", nothing)
-    scatter_bulk_max_waste[] = @load_preference("scatter_bulk_max_waste", nothing)
     _register_builtin_datatypes!()
 end
 

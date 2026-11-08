@@ -390,40 +390,6 @@ function _contiguous_runs(idxs::AbstractVector{<:Integer})
     runs
 end
 
-"""
-    LegendHDF5IO.scatter_bulk_max_bytes[]
-
-Size up to which a scattered read reads the whole index span its events
-cover, instead of reading the events themselves.
-
-Reading the span costs one read operation. Reading the events costs one
-scattered selection, or one read per run of adjacent events, depending on
-element type, rank and layout. With the default `nothing` the limit depends
-on the file system the file lives on: 1 MiB on local storage and 8 MiB on
-network file systems such as GPFS, NFS or Lustre, where fewer and larger
-reads pay off. Variable-length elements like strings are always read
-selectively. Can also be set per environment as the preference
-"scatter_bulk_max_bytes".
-
-See also [`LegendHDF5IO.scatter_bulk_max_waste`](@ref).
-"""
-const scatter_bulk_max_bytes = Ref{Union{Nothing, Int}}(nothing)
-
-"""
-    LegendHDF5IO.scatter_bulk_max_waste[]
-
-Factor by which a scattered read may exceed the requested amount of data
-when it reads the whole index span its events cover.
-
-Densely covered spans are read as a whole however large they are, so
-raising this trades reading more data for fewer read operations. With the
-default `nothing` the factor is 4 on local storage and 16 on network file
-systems. Spans up to [`LegendHDF5IO.scatter_bulk_max_bytes`](@ref) are read
-as a whole regardless. Can also be set per environment as the preference
-"scatter_bulk_max_waste".
-"""
-const scatter_bulk_max_waste = Ref{Union{Nothing, Float64}}(nothing)
-
 # Network file systems pay per operation rather than per byte:
 const _scatter_defaults = (
     disk = (bytes = 2^20, waste = 4.0),
@@ -1103,9 +1069,10 @@ applied to `lh.data_store[s]`, so arrays other than those of `Enum`s,
 creates and writes `HDF5.Group`s and `HDF5.Dataset`s.
 
 With `usechunks = true`, array datasets are created chunked, so `append!` can
-extend them, and the first array written sets the chunk size. With
-`compress` set to `:zstd` or `:deflate`, array datasets are chunked and
-compressed, with chunks of at most 1 MiB.
+extend them. The first array written sets the chunk size, up to
+[`LegendHDF5IO.max_chunk_bytes`](@ref). With `compress` set to `:zstd` or
+`:deflate`, array datasets are chunked and compressed, with chunks of at most
+[`LegendHDF5IO.max_compressed_chunk_bytes`](@ref).
 
 Supported value types include `RealQuantity` and arrays thereof, `Bool`,
 `String`, `Symbol`, `Enum`s, (arrays of) `NTuple`s and `StaticVector`s,
@@ -1150,15 +1117,14 @@ _dataset_filters(compress::Symbol) =
     compress === :zstd ? HDF5.Filters.Filter[H5Zzstd.ZstdFilter(3)] :
     HDF5.Filters.Filter[HDF5.Filters.Shuffle(), HDF5.Filters.Deflate(3)]
 
-# A compressed chunk is decompressed as a whole, so compressed chunks stay
-# small enough that a partial read decompresses little more than it needs:
-const _compressed_chunk_bytes = 2^20
-
+# The first array written is split evenly into chunks of at most the cap, so
+# that the chunks hold it without a partially filled one:
 function _chunk_length(::Type{T}, sz_inner, sz_outer::Integer, compress::Symbol) where {T}
-    compress === :none && return sz_outer
+    cap = compress === :none ? max_chunk_bytes[] : max_compressed_chunk_bytes[]
     # Variable-length elements like strings are stored as references in the chunk:
     elsize = isbitstype(T) ? sizeof(T) : sizeof(Ptr{Cvoid})
-    min(sz_outer, max(1, fld(_compressed_chunk_bytes, elsize * prod(sz_inner))))
+    max_rows = max(1, fld(cap, elsize * prod(sz_inner)))
+    cld(sz_outer, cld(sz_outer, max_rows))
 end
 
 @deprecate LHDataStore(f::AbstractString, access::AbstractString = "r") lh5open(f, access)
@@ -1487,18 +1453,19 @@ end
 
 """
     lh5open(filename::AbstractString, access::AbstractString = "r";
-        usechunks::Bool = false, compress = false)
+        usechunks::Bool = LegendHDF5IO.usechunks[], compress = LegendHDF5IO.compress[])
 
 Open a LEGEND HDF5 file and return an [`LHDataStore`](@ref) object.
 
 With `usechunks = true`, newly written array datasets are chunked and can be
 extended with `append!`. `compress` selects their compression: `true` or
 `:zstd` for Zstandard, `:deflate` (alias `:gzip`) for shuffle plus deflate.
-Compressed datasets are always chunked. LEGEND HDF5 files typically use the
-file extension ".lh5".
+Compressed datasets are always chunked. Both default to the settings
+[`LegendHDF5IO.usechunks`](@ref) and [`LegendHDF5IO.compress`](@ref). LEGEND
+HDF5 files typically use the file extension ".lh5".
 """
 function lh5open(filename::AbstractString, access::AbstractString = "r";
-    usechunks::Bool = false, compress::Union{Bool,Symbol} = false)
+    usechunks::Bool = LegendHDF5IO.usechunks[], compress::Union{Bool,Symbol} = LegendHDF5IO.compress[])
 
     mode = _compress_mode(compress)
     LHDataStore(HDF5.h5open(filename, access), usechunks, mode)
