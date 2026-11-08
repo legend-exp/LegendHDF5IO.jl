@@ -16,6 +16,7 @@ using StaticArrays
 using StatsBase
 using StructArrays
 using Tables
+using TypedTables
 using Unitful
 
 import DataAPI
@@ -1110,6 +1111,8 @@ struct AboveHalf end
                 tbl = lhd["tbl"]
                 # a StructArray over the disk-backed columns would slice and append with a stale row type:
                 @test_throws ArgumentError StructArray(tbl)
+                @test_throws ArgumentError TypedTables.Table(tbl)
+                @test TypedTables.Table(tbl[1:2]) isa TypedTables.Table
                 @test_throws ArgumentError StructVector(tbl)
                 @test_throws ArgumentError convert(StructArray, tbl)
                 @test_throws ArgumentError StructArray(tbl; unwrap = t -> false)

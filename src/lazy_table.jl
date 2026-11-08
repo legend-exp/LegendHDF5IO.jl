@@ -22,10 +22,10 @@ index vector or mask reads the selected rows into a `StructArray`, and
 thousand, so loops, comprehensions and `map` read neither one row at a time
 nor everything at once. `filter`, `findall` and reductions go through
 iteration, while `sort` and `sortperm` read the table first. `vcat` of lazy
-tables chains them, and concatenation with other arrays is refused. So is
-`StructArray(tbl)`: once a column was read eagerly, such a `StructArray`
-would slice and append rows with a stale row type and bypass the append
-checks.
+tables chains them, and concatenation with other arrays is refused. So are
+`StructArray(tbl)` and `TypedTables.Table(tbl)`: they would append through
+the columns without the table's checks, and a `StructArray` of a column read
+eagerly would slice and append rows with a stale row type.
 
 Lazy tables stop working when the file they read from is closed. The rows
 read from them do not.
@@ -158,7 +158,8 @@ _typed_column(col) = col
 _typed_column(col::AbstractLH5Table) = _typed_table(col)
 
 # Once a column was read eagerly, a StructArray over the columns would slice
-# and append rows with a stale row type and bypass the append checks:
+# and append rows with a stale row type and bypass the append checks. The
+# TypedTables extension refuses Table(tbl) the same way:
 StructArrays.StructArray(::AbstractLH5Table; kwargs...) = throw(ArgumentError(
     "Lazy tables do not convert to StructArrays, read the rows with tbl[:]"))
 
