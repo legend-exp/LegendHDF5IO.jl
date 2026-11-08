@@ -739,6 +739,44 @@ function DiskArrays.eachchunk(lh::LH5Array{T, N}
     isempty(lh) ? DiskArrays.GridChunks(lh, max.(size(lh), 1)) : DiskArrays.estimate_chunksize(lh)
 end
 
+# DiskArrays 0.4.25 gives concatenations with a zero-length part the wrong
+# length or throws while merging the chunks (fixed upstream after 0.4.25), so
+# concatenations of LH5Arrays with other disk arrays refuse empty parts until
+# the fix is released. The repeated signatures keep the methods more specific
+# than DiskArrays' and unambiguous among themselves and with the table guards:
+const _LH5VecOrMat = Union{LH5Array{<:Any, 1}, LH5Array{<:Any, 2}}
+const _DiskVecOrMat = Union{DiskArrays.AbstractDiskArray{<:Any, 1}, DiskArrays.AbstractDiskArray{<:Any, 2}}
+const _DiskArray = DiskArrays.AbstractDiskArray
+
+_check_concat_parts(As) = any(isempty, As) && throw(ArgumentError(
+    "DiskArrays cannot concatenate zero-length arrays yet, read them with [:] first"))
+
+for f in (:vcat, :hcat)
+    @eval begin
+        Base.$f(A::_LH5VecOrMat, As::_DiskVecOrMat...) = _concat_checked($f, A, As...)
+        Base.$f(A::_DiskVecOrMat, B::_LH5VecOrMat, As::_DiskVecOrMat...) = _concat_checked($f, A, B, As...)
+        Base.$f(A::_LH5VecOrMat, B::_LH5VecOrMat, As::_DiskVecOrMat...) = _concat_checked($f, A, B, As...)
+    end
+end
+function _concat_checked(f, As::_DiskVecOrMat...)
+    _check_concat_parts(As)
+    invoke(f, Tuple{_DiskVecOrMat, Vararg{_DiskVecOrMat}}, As...)
+end
+
+Base.cat(A::LH5Array, As::AbstractArray...; dims) = _cat_checked(dims, A, As...)
+Base.cat(A::AbstractArray, B::LH5Array, As::AbstractArray...; dims) = _cat_checked(dims, A, B, As...)
+Base.cat(A::LH5Array, B::_DiskArray, As::AbstractArray...; dims) = _cat_checked(dims, A, B, As...)
+Base.cat(A::_DiskArray, B::LH5Array, As::AbstractArray...; dims) = _cat_checked(dims, A, B, As...)
+Base.cat(A::LH5Array, B::LH5Array, As::AbstractArray...; dims) = _cat_checked(dims, A, B, As...)
+Base.cat(::LH5Array, ::AbstractLH5Table, ::AbstractArray...; dims) = _lazy_concat(cat)
+Base.cat(::AbstractLH5Table, ::LH5Array, ::AbstractArray...; dims) = _lazy_concat(cat)
+
+function _cat_checked(dims, As::AbstractArray...)
+    _check_concat_parts(As)
+    first(As) isa _DiskArray ? invoke(cat, Tuple{_DiskArray, Vararg{AbstractArray}}, As...; dims) :
+        invoke(cat, Tuple{AbstractArray, _DiskArray, Vararg{AbstractArray}}, As...; dims)
+end
+
 Base.size(lh::LH5Array{T, N}) where {T, N} = begin
     dspace = HDF5.dataspace(lh.file)
     try
