@@ -94,11 +94,11 @@ are not supported: they would append through the columns without the table's
 checks, and a `StructArray` of a column read eagerly would slice and append
 rows with a stale row type. Read the rows with `tbl[:]` instead.
 
-A table handle keeps the column names it was opened with: columns added
-through other handles are not visible to it, and `append!` refuses when the
-set of column names has changed. Columns it has opened keep reading the data
-they were opened on, even after they were deleted or replaced elsewhere.
-`append!` reopens replaced columns and refreshes the others.
+A handle, a table or an array, works while the stored object is as it was
+when the handle was opened. An append or a structure change (`add_entries!`,
+`delete_entry!`) through another handle makes its reads and appends throw,
+and it must be reopened; its own appends keep it current. In-place writes
+change no cached state, so every handle sees them.
 
 Scattered reads either read the whole index span the events cover, or only
 the events themselves. The thresholds for that choice,

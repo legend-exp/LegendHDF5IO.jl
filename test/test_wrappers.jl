@@ -752,23 +752,51 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                     append!(h1, VectorOfVectors([[4, 5]]))
                     # h2 still holds the element pointers from before that append:
                     @test_throws ArgumentError append!(h2, VectorOfVectors([[6]]))
+                    @test_throws ArgumentError h2[:]
                     @test lhd["vofv_stale"][:] == [[1, 2], [3], [4, 5]]
                 end
-                @testset "append through a lazy table after column changes" begin
+                @testset "handles fail once their table changed through another handle" begin
                     lhd["tbl_cols"] = StructArray((a = [1, 2], b = [3, 4]))
+                    early = lhd["tbl_cols"]
                     t = lhd["tbl_cols"]
                     t[:]  # opens and caches the columns
                     delete_entry!(lhd, "tbl_cols/b")
                     add_entries!(lhd, "tbl_cols", StructArray((b = [30, 40],)))
-                    append!(t, StructArray((a = [5], b = [50])))
-                    @test lhd["tbl_cols"][:] == StructArray((a = [1, 2, 5], b = [30, 40, 50]))
-                    @test t[:] == lhd["tbl_cols"][:]
+                    @test_throws ArgumentError t[:]
+                    @test_throws ArgumentError t.a[:]
+                    @test_throws ArgumentError append!(t, StructArray((a = [5], b = [50])))
+                    @test_throws ArgumentError early[:]
+                    @test lhd["tbl_cols"][:] == StructArray((a = [1, 2], b = [30, 40]))
+                    # appends through another handle of the table:
                     lhd["tbl_vov"] = StructArray((v = VectorOfVectors([[1], [2, 3]]),))
+                    early = lhd["tbl_vov"]
                     orig = lhd["tbl_vov"]
                     orig[:]
                     append!(lhd["tbl_vov"], StructArray((v = VectorOfVectors([[4, 5]]),)))
-                    append!(orig, StructArray((v = VectorOfVectors([[6, 7]]),)))
-                    @test lhd["tbl_vov"][:] == StructArray((v = VectorOfVectors([[1], [2, 3], [4, 5], [6, 7]]),))
+                    @test_throws ArgumentError orig[:]
+                    @test_throws ArgumentError append!(orig, StructArray((v = VectorOfVectors([[6, 7]]),)))
+                    @test lhd["tbl_vov"][:] == StructArray((v = VectorOfVectors([[1], [2, 3], [4, 5]]),))
+                    # a handle that had opened no column yet is current, and its own appends keep it so:
+                    @test early[:] == lhd["tbl_vov"][:]
+                    append!(early, StructArray((v = VectorOfVectors([[6, 7]]),)))
+                    @test early[:] == lhd["tbl_vov"][:] == StructArray((v = VectorOfVectors([[1], [2, 3], [4, 5], [6, 7]]),))
+                    # a replaced ragged or waveform column of the same total length is noticed as well:
+                    trng = range(0.0u"μs", 10.0u"μs"; length = 3)
+                    rag = VectorOfVectors([Float32[1, 2], Float32[3, 4], Float32[5, 6], Float32[7, 8]])
+                    wf4 = ArrayOfRDWaveforms((fill(trng, 4), VectorOfSimilarVectors(rand(UInt16, 3, 4))))
+                    lhd["tbl_repl"] = StructArray((a = [1, 2, 3, 4], v = rag, wf = wf4))
+                    old = lhd["tbl_repl"]
+                    old[1:2]
+                    newv = VectorOfVectors([Float32[9], Float32[8, 7, 6], Float32[5], Float32[4, 3, 2]])
+                    neww = ArrayOfRDWaveforms((fill(trng, 4), VectorOfSimilarVectors(rand(UInt16, 3, 4))))
+                    delete_entry!(lhd, "tbl_repl/v")
+                    add_entries!(lhd, "tbl_repl", StructArray((v = newv,)))
+                    delete_entry!(lhd, "tbl_repl/wf")
+                    add_entries!(lhd, "tbl_repl", StructArray((wf = neww,)))
+                    more = StructArray((a = [5], v = VectorOfVectors([Float32[1, 1, 1]]), wf = neww[1:1]))
+                    @test_throws ArgumentError append!(old, more)
+                    @test_throws ArgumentError old[:]
+                    @test lhd["tbl_repl"][:] == StructArray((a = [1, 2, 3, 4], v = newv, wf = neww))
                 end
                 @testset "append tables with waveform and nested columns" begin
                     trng = range(0.0u"μs", 10.0u"μs"; length = 4)
@@ -804,15 +832,15 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                     add_entries!(lhd, "tbl_nest2", StructArray((d = [5, 6, 7],)))
                     @test_throws ArgumentError append!(c, c)
                     @test lhd["tbl_nest2"][:].a == [1, 2, 7]
-                    # a replaced nested column is reopened before the stored columns are checked:
+                    # a nested column replaced through another handle makes the StructArray stale as well:
                     lhd["tbl_nest3"] = StructArray((a = [1, 2], sub = StructArray((b = [3, 4], c = [5, 6]))))
                     c3 = StructArray(Tables.columntable(lhd["tbl_nest3"]))
                     c3[:]
                     delete_entry!(lhd, "tbl_nest3/sub/b")
                     add_entries!(lhd, "tbl_nest3/sub", StructArray((b = [30, 40],)))
-                    append!(c3, StructArray((a = [5], sub = StructArray((b = [50], c = [7])))))
+                    @test_throws ArgumentError append!(c3, StructArray((a = [5], sub = StructArray((b = [50], c = [7])))))
                     rows3 = lhd["tbl_nest3"][:]
-                    @test rows3.a == [1, 2, 5] && rows3.sub.b == [30, 40, 50] && rows3.sub.c == [5, 6, 7]
+                    @test rows3.a == [1, 2] && rows3.sub.b == [30, 40] && rows3.sub.c == [5, 6]
                     @test length(lhd["tbl_nest/a"]) == 2 && length(lhd["tbl_nest/sub/b"]) == 2
                 end
                 @testset "append from aliased and inconsistent sources" begin
@@ -1457,7 +1485,7 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                 j = innermerge(lhd["a"], (old = 2 .* y,))
                 @test j[:].old == 2 .* y && j[:].x == x && [r.old for r in j] == 2 .* y
             end
-            # rows of a join read the current columns of its tables:
+            # a join reads through its tables' handles, which fail once the tables changed elsewhere:
             lh5open(joinpath(dir, "joingrow.lh5"), "w"; usechunks = true) do lhd
                 lhd["a"] = StructArray((x = [1, 2], y = [3, 4]))
                 lhd["b"] = StructArray((x = [5, 6],))
@@ -1466,9 +1494,12 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                 @test j[1:2].y == [3, 4]
                 delete_entry!(lhd, "a/y")
                 add_entries!(lhd, "a", StructArray((y = [30, 40],)))
-                append!(ta, StructArray((x = [7], y = [50])))
+                @test_throws ArgumentError append!(ta, StructArray((x = [7], y = [50])))
+                append!(lhd["a"], StructArray((x = [7], y = [50])))
                 append!(tb, StructArray((x = [8],)))
-                @test j.y[:] == [30, 40, 50] && j[:].y == [30, 40, 50] && j[:].x == [5, 6, 8]
+                @test_throws ArgumentError j[:]
+                j2 = innermerge(lhd["a"], tb)
+                @test j2.y[:] == [30, 40, 50] && j2[:].y == [30, 40, 50] && j2[:].x == [5, 6, 8]
             end
             # the length of a join is the current length of the tables that provide its columns:
             lh5open(joinpath(dir, "joinlen.lh5"), "w"; usechunks = true) do lhd
@@ -1775,6 +1806,17 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                 @test_throws ArgumentError s[:]
                 # a function broadcast over the selection reads only the columns it uses:
                 @test @inferred(broadcast(@pf($sub.x * 2), s)) == [2.0, 4.0, 6.0]
+            end
+            # columns of another file cannot pose as columns of a table:
+            for k in 1:2
+                lh5open(lhd -> lhd["t"] = StructArray((a = [1.0], b = [2.0])), joinpath(dir, "same$k.lh5"), "w"; usechunks = true)
+            end
+            lh5open(joinpath(dir, "same1.lh5"), "r+"; usechunks = true) do h1
+                lh5open(joinpath(dir, "same2.lh5"), "r+"; usechunks = true) do h2
+                    t1, t2 = h1["t"], h2["t"]
+                    @test_throws ArgumentError append!(StructArray((a = t1.a, b = t2.b)), StructArray((a = [3.0], b = [4.0])))
+                    @test length(h1["t"]) == 1 && length(h2["t"]) == 1 && h1["t"][:] == h2["t"][:]
+                end
             end
         end
     end

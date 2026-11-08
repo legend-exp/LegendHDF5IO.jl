@@ -41,6 +41,9 @@ julia> append!(lh, x)   # append them, the dataset must be chunked
 """
 mutable struct LH5Array{T, N} <: DiskArrays.AbstractDiskArray{T, N}
     file::HDF5.Dataset
+    key::Tuple{UInt, HDF5.API.H5O_token_t}
+    generation::Int
+    LH5Array{T, N}(ds::HDF5.Dataset) where {T, N} = (key = _object_key(ds); new{T, N}(ds, key, _generation(key)))
 end
 
 const LH5AoSA{T, M, N, L} = ArrayOfSimilarArrays{T, M, N, LH5Array{T, L}}
@@ -342,6 +345,7 @@ end
 
 _getindex_impl(lh::LH5Array{T, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {T, N} = begin
+    _check_current(lh)
     dtype = HDF5.datatype(lh.file)
     val = try
         HDF5.generic_read(lh.file, dtype, T, idxs...)
@@ -356,6 +360,7 @@ end
 # rather than reinterpreted:
 _getindex_impl(lh::LH5Array{Bool, N}, idxs::Vararg{HDF5.IndexType, N}
 ) where {N} = begin
+    _check_current(lh)
     dtype = HDF5.datatype(lh.file)
     val = try
         HDF5.generic_read(lh.file, dtype, UInt8, idxs...)
@@ -367,7 +372,7 @@ end
 
 # HDF5 converts strings itself when asked for String:
 _getindex_impl(lh::LH5Array{String, N}, idxs::Vararg{HDF5.IndexType, N}
-) where {N} = read(lh.file, String, idxs...)
+) where {N} = (_check_current(lh); read(lh.file, String, idxs...))
 
 function _append_elemptr!(dest_ptr::AbstractVector{<:Integer}, src_ptr::AbstractVector{<:Integer})
     offset = last(dest_ptr) - first(src_ptr)
@@ -620,6 +625,7 @@ _read_selection(ds::HDF5.Dataset, ::Type{Bool}, fspace::HDF5.Dataspace, dims::Di
 _getindex_impl(lh::LH5Array{T, N},
     idxs::Vararg{Union{HDF5.IndexType, AbstractVector{<:Integer}}, N}
 ) where {T, N} = begin
+    _check_current(lh)
     front, ilast = Base.front(idxs), idxs[end]
     if ilast isa AbstractVector{Bool}
         checkbounds(lh, front..., ilast)
@@ -652,6 +658,7 @@ end
 function DiskArrays.writeblock!(lh::LH5Array{T, N}, v::AbstractArray,
     r::Vararg{AbstractUnitRange, N}
 ) where {T, N}
+    _check_current(lh)
     # DiskArrays bounds-checks reads but not writes:
     checkbounds(lh, r...)
     lh.file[map(UnitRange{Int}, r)...] = _ustrip(convert(Array{T, N}, v))
@@ -839,6 +846,7 @@ Base.append!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} =
     _append_impl!(dest, src)
 
 _append_impl!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
+    _check_current(dest)
     x = convert(Array{T, N}, src)
     old_size = size(dest)
     Base.front(size(x)) == Base.front(old_size) || throw(DimensionMismatch(
@@ -853,7 +861,7 @@ _append_impl!(dest::LH5Array{T, N}, src::AbstractArray) where {T, N} = begin
         HDF5.set_extent_dims(dest.file, old_size)
         rethrow()
     end
-    dest
+    _advance!(dest)
 end
 
 Base.append!(dest::LH5VoV, src::VectorOfVectors) = _append_impl!(dest, src)
@@ -862,40 +870,11 @@ Base.append!(dest::LH5VoV, src::VectorOfVectors) = _append_impl!(dest, src)
 _append_impl!(dest::LH5VoV, src::AbstractVector{<:AbstractVector}) =
     _append_impl!(dest, VectorOfVectors(src))
 
-# Whether a column can be appended to. Ragged arrays and waveforms keep their
-# element pointers and time axes from when they were opened. Another handle
-# may have appended since, and appending from stale ones corrupts the array:
-_check_appendable(::Any) = nothing
-
-function _check_appendable(A::LH5VoV)
-    ptr = ArraysOfArrays.internal_element_ptr(A)
-    ptr isa Vector || throw(ArgumentError(
-        "Cannot append through a view of a ragged array, its element pointers cannot grow"))
-    clen = _column_object(A)["cumulative_length"]
-    try
-        length(clen) == length(A) && length(fused(A)) == last(ptr) - first(ptr) || throw(ArgumentError(
-            "The array changed on disk since it was opened, reopen it to append"))
-    finally
-        close(clen)
-    end
-end
-
-function _check_appendable(wf::LH5VectorOfRDWaveforms)
-    _check_appendable(wf.signal)
-    t0 = _column_object(wf)["t0"]
-    try
-        n = length(wf.time)
-        length(wf.signal) == n && length(t0) == n || throw(ArgumentError(
-            "The array changed on disk since it was opened, reopen it to append"))
-    finally
-        close(t0)
-    end
-end
-
 _append_impl!(dest::LH5VoV, src::VectorOfVectors) = begin
     isempty(src) && return dest
-    _check_appendable(dest)
     dest_ptr = ArraysOfArrays.internal_element_ptr(dest)
+    dest_ptr isa Vector || throw(ArgumentError(
+        "Cannot append through a view of a ragged array, its element pointers cannot grow"))
     dset = parent(fused(dest).file)["cumulative_length"]
     try
         clen = LH5Array(dset)
@@ -943,8 +922,31 @@ _column_object(A::StructArray{<:NamedTuple}) =
     parent(_column_object(first(StructArrays.components(A))))
 _column_object(tbl::LH5LazyTable) = _table_store(tbl)
 
-_object_token(obj) = HDF5.API.h5o_get_info(obj, HDF5.API.H5O_INFO_BASIC).token
-_same_object(a, b) = _object_token(a) == _object_token(b)
+# Every stored object has a generation, which appends and structure changes
+# through any handle advance. A handle keeps the generation it was opened or
+# last appended with, and reading or appending through it is refused once
+# the object moved on, so that nothing reads or appends with stale element
+# pointers. Keys are file number and object token, since tokens are unique
+# within a file only:
+const _generations = Dict{Tuple{UInt, HDF5.API.H5O_token_t}, Int}()
+const _generations_lock = ReentrantLock()
+
+_object_info(obj) = HDF5.API.h5o_get_info(obj, HDF5.API.H5O_INFO_BASIC)
+_object_key(obj) = (info = _object_info(obj); (UInt(info.fileno), info.token))
+_generation(key) = lock(() -> get(_generations, key, 0), _generations_lock)
+_advance_generation!(key) = lock(() -> (_generations[key] = get(_generations, key, 0) + 1), _generations_lock)
+_advance_generation!(obj::Union{HDF5.Dataset, HDF5.Group}) = _advance_generation!(_object_key(obj))
+_advance_generation!(store::HDF5.H5DataStore, path::AbstractString) = _with_object(_advance_generation!, store, path)
+
+_stale(what) = ArgumentError(
+    "The $what was appended to or changed through another handle since this one was opened, reopen it")
+
+_check_current(A::LH5Array) = A.generation == _generation(A.key) || throw(_stale("dataset"))
+_check_current(A::Union{LH5VoV, LH5AoSA}) = _check_current(fused(A))
+_check_current(wf::LH5VectorOfRDWaveforms) = _check_current(wf.signal)
+_check_current(A::StructArray{<:NamedTuple}) = foreach(_check_current, StructArrays.components(A))
+_check_current(::Any) = nothing
+_advance!(A::LH5Array) = (A.generation = _advance_generation!(A.key); A)
 
 # Columns that can be appended to on disk, nested tables when all of theirs can:
 _disk_column(::Union{LH5Array, LH5VoV, LH5AoSA, LH5VectorOfRDWaveforms, LH5LazyTable}) = true
@@ -966,27 +968,6 @@ _reads_from_disk(A::Union{VectorOfEncodedArrays, VectorOfEncodedSimilarArrays}) 
 
 # Ragged arrays and waveforms keep their element pointers and time axes in
 # memory. Bringing them up to date keeps tables built from them coherent:
-_refresh!(::Union{LH5Array, LH5AoSA}) = false
-
-function _refresh!(A::LH5VoV)
-    clen_ds = _column_object(A)["cumulative_length"]
-    clen = try LH5Array(clen_ds)[:] finally close(clen_ds) end
-    new_ptr = _element_ptrs(clen)
-    ptr = ArraysOfArrays.internal_element_ptr(A)
-    resize!(ptr, length(new_ptr))
-    copyto!(ptr, new_ptr)
-    resize!(A.kernel_size, length(clen))
-    false
-end
-
-function _refresh!(wf::LH5VectorOfRDWaveforms)
-    _refresh!(wf.signal)
-    fresh = LH5Array(_column_object(wf), AbstractVector{<:RDWaveform})
-    resize!(wf.time, length(fresh.time))
-    copyto!(wf.time, fresh.time)
-    false
-end
-
 function _check_table_columns(stored, dest)
     issetequal(stored, propertynames(dest)) || throw(ArgumentError(
         "The columns of the table changed on disk since it was opened, reopen it to append"))
@@ -1004,36 +985,37 @@ end
 
 Base.append!(dest::LH5Table, src) = _append_impl!(dest, src)
 
-# Columns must be disk-backed and still be the objects stored under their
-# names, and nested tables, like the table itself, must still have the columns
-# they were opened with:
+# Columns must be disk-backed, current, and columns of one stored table, which
+# must still have the columns they were opened with; nested tables likewise:
 function _check_append_dest(dest::StructArray{<:NamedTuple})
     cols = StructArrays.components(dest)
     for (name, col) in pairs(cols)
         _disk_column(col) || throw(ArgumentError(
             "Column \"$name\" was read into memory and cannot be appended to on disk"))
+        _check_current(col)
     end
     group = _column_object(dest)
-    _check_table_columns(propertynames(LH5Array(group)), dest)
-    for (name, col) in pairs(cols)
-        current = group[String(name)]
-        try
-            _same_object(_column_object(col), current) || throw(ArgumentError(
-                "Column \"$name\" was replaced on disk since it was opened, reopen the table to append"))
-        finally
-            close(current)
+    try
+        key = _object_key(group)
+        for (name, col) in pairs(cols)
+            _with_table_group(g -> _object_key(g) == key, col) || throw(ArgumentError(
+                "Column \"$name\" is not a column of the table the other columns belong to"))
         end
-        _check_appendable(col)
+        _check_table_columns(propertynames(LH5Array(group)), dest)
+    finally
+        close(group)
     end
     foreach(col -> col isa Union{StructArray{<:NamedTuple}, LH5LazyTable} && _check_append_dest(col), cols)
 end
 
-# A lazy table may have gained or lost columns since it was opened, and its
-# cached columns may have been appended to or replaced, so it is checked and
-# brought up to date with the file first:
+# The group of the table a column belongs to:
+function _with_table_group(f, col)
+    group = parent(_column_object(col))
+    try f(group) finally close(group) end
+end
+
 function _check_append_dest(tbl::LH5LazyTable)
-    _check_table_columns(propertynames(LH5Array(_table_store(tbl))), tbl)
-    _refresh_cache!(tbl)
+    _check_current(tbl)
     _check_append_dest(_typed_table(tbl))
 end
 
@@ -1100,7 +1082,6 @@ Base.append!(dest::W, src::W) where {W<:LH5VectorOfRDWaveforms} = _append_impl!(
 _append_impl!(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) = begin
     length(src.time) == length(src.signal) || throw(ArgumentError(
         "The waveforms to append have more time axes than signals or vice versa"))
-    _check_appendable(dest)
     grp = _column_object(dest)
     dset_t0 = grp["t0"]
     dset_dt = grp["dt"]
@@ -1594,6 +1575,7 @@ function add_entries!(lhd::LHDataStore, i::AbstractString, src::StructArray{<:Na
         "Cannot add columns of length $(length(src)) to table of length $(length(current))"))
     names = _add_entries!(lhd, i, StructArrays.components(src), propertynames(current))
     setdatatype!(lhd.data_store[i], StructArray{NamedTuple{names}})
+    _advance_generation!(lhd.data_store, i)
     nothing
 end
 
@@ -1608,6 +1590,7 @@ function add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple)
         "\"$i\" is not a NamedTuple, add columns to a table as a StructArray"))
     names = _add_entries!(lhd, i, src, keys(current))
     setdatatype!(lhd.data_store[i], NamedTuple{names})
+    _advance_generation!(lhd.data_store, i)
     nothing
 end
 export add_entries!
@@ -1640,6 +1623,7 @@ Supported are entries of `NamedTuple`s, tables and `HDF5.Group`s.
 function delete_entry!(lhd::LHDataStore, i::AbstractString)
     parent, child = splitdir(i)
     if isempty(parent) || (parent == "/")
+        _advance_generation!(lhd.data_store, i)
         HDF5.delete_object(lhd.data_store[i])
     else
         _delete_entry(lhd, lhd[parent], parent, child)
@@ -1658,7 +1642,9 @@ function _delete_entry(lhd::LHDataStore, nt::NamedTuple,
     parent::AbstractString, child::AbstractString)
 
     remaining = _remaining_entries(keys(nt), parent, child)
+    _advance_generation!(lhd.data_store, "$(parent)/$(child)")
     HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
+    _advance_generation!(lhd.data_store, parent)
     if hasattribute(lhd.data_store[parent], :datatype)
         setdatatype!(lhd.data_store[parent], NamedTuple{remaining})
     end
@@ -1669,7 +1655,9 @@ function _delete_entry(lhd::LHDataStore, tbl::LH5LazyTable,
     parent::AbstractString, child::AbstractString)
 
     remaining = _remaining_entries(propertynames(tbl), parent, child)
+    _advance_generation!(lhd.data_store, "$(parent)/$(child)")
     HDF5.delete_object(lhd.data_store["$(parent)/$(child)"])
+    _advance_generation!(lhd.data_store, parent)
     setdatatype!(lhd.data_store[parent], StructArray{NamedTuple{remaining}})
     nothing
 end
