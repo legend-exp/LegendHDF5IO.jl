@@ -84,9 +84,10 @@ Indexing `lhd["evt"]` with `[:]` or a range reads the rows into a
 `StructArray`. Iteration reads the rows in blocks, so loops, comprehensions
 and `map` read neither one row at a time nor the whole table at once. `filter`
 and `findall` scan the table this way, while `sort` reads it first.
-`StructArray(tbl)` is not supported: once a column was read eagerly, such a
-`StructArray` would slice and append rows with a stale row type and bypass the
-append checks.
+`StructArray(tbl)` and `TypedTables.Table(tbl)` are not supported: they would
+append through the columns without the table's checks, and a `StructArray` of
+a column read eagerly would slice and append rows with a stale row type. Read
+the rows with `tbl[:]` instead.
 
 A table handle keeps the column names it was opened with: columns added
 through other handles are not visible to it, and `append!` refuses when the
@@ -330,9 +331,10 @@ E = HDF5.h5open(f -> readdata(f, "energy"), "data.lh5")
 
 Version 0.2 reads tables as [`LH5LazyTable`](@ref)s instead of TypedTables
 `Table`s with lazily read columns. Column access (`tbl.energy`) works as before,
-`tbl[:]` and indexing with a range return a `StructArray` rather than a `Table`,
-and `TypedTables.Table(tbl)` gives a `Table` of the lazy columns again.
-TypedTables is no longer a dependency, and `StructArray(tbl)` is not supported.
+and `tbl[:]` and indexing with a range return a `StructArray` rather than a
+`Table`; `TypedTables.Table(tbl[:])` gives a `Table` of the rows. TypedTables
+is no longer a dependency, and `StructArray(tbl)` and `TypedTables.Table(tbl)`
+are not supported.
 Joins with `innermerge` return lazy tables, as before. Named PropertyFunctions
 selections return [`LH5TypedTable`](@ref)s, lazy tables with a fixed row type,
 where 0.1 returned `Table`s of the lazy columns.
