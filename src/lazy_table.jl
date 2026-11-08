@@ -51,8 +51,11 @@ table's checks, and a
 `StructArray` of a column read eagerly would slice and append rows with a
 stale row type.
 
-Lazy tables stop working when the file they read from is closed. The rows
-read from them do not.
+Lazy tables stop working when the file they read from is closed, and a
+handle stops working when its table is appended to or its columns are
+changed through another handle: its reads and appends then throw, and the
+table must be reopened. Its own appends keep it current. The rows read from
+a table do not depend on it.
 
 # Implementation
 
@@ -91,10 +94,18 @@ mutable struct LH5LazyTable <: AbstractLH5Table{NamedTuple}
     columns::Dict{Symbol, Any}
     typed::Any
     lock::ReentrantLock
+    key::Tuple{UInt, HDF5.API.H5O_token_t}
+    generation::Int
 end
 
-_lazy_table(ds::HDF5.H5DataStore, names) =
-    LH5LazyTable(ds, collect(Symbol, names), Dict{Symbol, Any}(), nothing, ReentrantLock())
+function _lazy_table(ds::HDF5.H5DataStore, names)
+    key = _object_key(ds)
+    LH5LazyTable(ds, collect(Symbol, names), Dict{Symbol, Any}(), nothing, ReentrantLock(), key, _generation(key))
+end
+
+# The table is used only while its group is as it was opened (see `_generations`):
+_check_current(tbl::LH5LazyTable) =
+    getfield(tbl, :generation) == _generation(getfield(tbl, :key)) || throw(_stale("table"))
 
 # The struct's own fields are shadowed by column access:
 _table_store(tbl::LH5LazyTable) = getfield(tbl, :data_store)
@@ -111,6 +122,7 @@ _no_column(name) = throw(ArgumentError("table has no column \"$name\""))
 
 # Several tasks may open columns at once, so the shared cache is locked:
 function _column(tbl::LH5LazyTable, name::Symbol)
+    _check_current(tbl)
     lock(_table_lock(tbl)) do
         get!(_table_columns(tbl), name) do
             hasproperty(tbl, name) || _no_column(name)
@@ -132,6 +144,7 @@ end
 
 # Memoized, since building it specializes on the full column type tuple:
 function _typed_table(tbl::LH5LazyTable)
+    _check_current(tbl)
     lock(_table_lock(tbl)) do
         cached = getfield(tbl, :typed)
         isnothing(cached) || return cached
@@ -143,38 +156,6 @@ function _typed_table(tbl::LH5LazyTable)
         typed
     end
 end
-
-"""
-    _refresh_cache!(tbl::LH5LazyTable)
-
-Bring the cached columns up to date with the file. Columns whose dataset was
-replaced are reopened, ragged arrays take their current element pointers and
-waveforms their current time axes, in place. Appends through `tbl` call this
-first, since other handles may have changed the table in the meantime.
-Returns whether a column was reopened, which makes tables built from the old
-columns stale.
-"""
-function _refresh_cache!(tbl::LH5LazyTable)
-    lock(_table_lock(tbl)) do
-        cols = _table_columns(tbl)
-        store = _table_store(tbl)
-        reopened = false
-        for (name, col) in cols
-            current = store[String(name)]
-            if _disk_column(col) && _same_object(_column_object(col), current)
-                close(current)
-                reopened |= _refresh!(col)
-            else
-                cols[name] = LH5Array(current)
-                reopened = true
-            end
-        end
-        reopened && setfield!(tbl, :typed, nothing)
-        reopened
-    end
-end
-
-_refresh!(tbl::LH5LazyTable) = _refresh_cache!(tbl)
 
 _typed_table(tbl::StructArray{<:NamedTuple}) = tbl
 
@@ -190,6 +171,7 @@ StructArrays.StructArray(::AbstractLH5Table; kwargs...) = throw(ArgumentError(
 # The shape of a column stored as a dataset gives the row count without
 # opening the column. A ragged column would read its element pointers:
 function Base.length(tbl::LH5LazyTable)
+    _check_current(tbl)
     names = _table_colnames(tbl)
     isempty(names) && return 0
     store = _table_store(tbl)
