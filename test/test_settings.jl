@@ -52,7 +52,9 @@ using LegendHDF5IO: max_chunk_bytes, max_compressed_chunk_bytes, usechunks, comp
             @with max_compressed_chunk_bytes => 4096 begin
                 lh5open(joinpath(dir, "ccap.lh5"), "w"; compress = :zstd) do lhd
                     lhd["x"] = x
-                    @test chunk(lhd, "x") == (500,)
+                    # a chunk holds strings as 16-byte references to their contents:
+                    lhd["s"] = string.(1:1000)
+                    @test chunk(lhd, "x") == (500,) && chunk(lhd, "s") == (250,)
                 end
             end
             # the defaults of lh5open's write options are settings:

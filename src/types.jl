@@ -1158,13 +1158,17 @@ _dataset_filters(compress::Symbol) =
     compress === :zstd ? HDF5.Filters.Filter[H5Zzstd.ZstdFilter(3)] :
     HDF5.Filters.Filter[HDF5.Filters.Shuffle(), HDF5.Filters.Deflate(3)]
 
+# A chunk holds variable-length elements like strings as references into the
+# global heap of the file, of a 4-byte length, an 8-byte heap address and a
+# 4-byte index:
+const _vlen_ref_bytes = 16
+
 # The first array written is split evenly into n chunks of at most the cap,
 # which leave fewer than n rows unused. Without rows, a chunk takes the most
 # rows the cap allows:
 function _chunk_length(::Type{T}, sz_inner, sz_outer::Integer, compress::Symbol) where {T}
     cap = compress === :none ? max_chunk_bytes[] : max_compressed_chunk_bytes[]
-    # Variable-length elements like strings are stored as references in the chunk:
-    elsize = isbitstype(T) ? sizeof(T) : sizeof(Ptr{Cvoid})
+    elsize = isbitstype(T) ? sizeof(T) : _vlen_ref_bytes
     max_rows = max(1, fld(cap, elsize * prod(sz_inner)))
     sz_outer > 0 ? cld(sz_outer, cld(sz_outer, max_rows)) : max_rows
 end
