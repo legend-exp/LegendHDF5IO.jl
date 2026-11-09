@@ -1787,6 +1787,7 @@ struct AboveHalf end
                 @test fc["arr"][:] == xs
                 @test innermerge(t, fc["u"])[:].y == ys
                 @test_throws ArgumentError fc["nope"]
+                @test_throws ArgumentError fc["arr/nope"]
                 # writing a chained table merges the files:
                 lh5open(lhd -> lhd["t"] = t, joinpath(dir, "merged.lh5"), "w")
                 @test lh5open(lhd -> lhd["t"][:], joinpath(dir, "merged.lh5")) == rows
@@ -2071,6 +2072,21 @@ struct AboveHalf end
                 lh5open(lhd -> lhd["t"] = StructArray((unused = u1, wanted = [3, 4])), f1, "w")
                 lh5open(lhd -> lhd["t"] = StructArray((unused = u2, wanted = [5, 6])), f2, "w")
                 lh5open(fc -> @test(fc["t"].wanted[:] == [3, 4, 5, 6]), [f1, f2])
+            end
+            # but a table that another file stores as a dataset differs from it:
+            na, nb, nc = (joinpath(dir, "nested_$s.lh5") for s in ("a", "b", "c"))
+            lh5open(lhd -> lhd["t"] = StructArray((a = [1, 2], sub = StructArray((c = [1, 2],)))), na, "w")
+            lh5open(lhd -> lhd["t"] = StructArray((a = [3], sub = [5])), nb, "w")
+            lh5open(lhd -> lhd["t"] = [3], nc, "w")
+            differs(f, fn) = try f(); false catch e
+                e isa ArgumentError && occursin("$(basename(fn)) differs", sprint(showerror, e))
+            end
+            lh5open([na, nb]) do fc
+                @test fc["t"].a[:] == [1, 2, 3] && length(fc["t"]) == 3
+                @test differs(() -> fc["t"][:], nb) && differs(() -> fc["t"].sub, nb)
+            end
+            lh5open([na, nc]) do fc
+                @test differs(() -> fc["t"].a, nc) && differs(() -> length(fc["t"]), nc)
             end
         end
     end

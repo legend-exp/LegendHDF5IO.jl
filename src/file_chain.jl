@@ -131,6 +131,20 @@ _child_path(path::AbstractString, name::Symbol) = string(rstrip(path, '/'), "/",
 _missing_object(chain::LH5FileChain, k::Integer, path::AbstractString) =
     throw(ArgumentError("\"$path\" is missing in $(chain.filenames[k])"))
 
+_differing_object(chain::LH5FileChain, k::Integer, path::AbstractString) = throw(ArgumentError(
+    "\"$path\" in $(chain.filenames[k]) differs from $(chain.filenames[1]) in its datatype, units, codec, element type or size"))
+
+# The kind of the object at `path` in file `k`, which must have one. The path
+# comes from the first file, so a dataset that it leads through in file `k` is
+# a group in the first file:
+function _checked_kind(chain::LH5FileChain, store::HDF5.H5DataStore, k::Integer, path::AbstractString)
+    kind = _object_kind(store, path)
+    isnothing(kind) || return kind
+    names = split(path, '/'; keepempty = false)
+    i = findfirst(i -> _object_kind(store, names[1:i]) == :dataset, eachindex(names))
+    isnothing(i) ? _missing_object(chain, k, path) : _differing_object(chain, k, join(names[1:i], '/'))
+end
+
 # What must match between files: attributes, element types and inner sizes
 # of datasets, and the same for the members of groups. Writers differ in the
 # integer types of element counts, which every reader converts:
@@ -166,7 +180,7 @@ end
 
 function _structure(chain::LH5FileChain, file, k::Integer, path::AbstractString)
     store = file.lhd.data_store
-    haskey(store, path) || _missing_object(chain, k, path)
+    _checked_kind(chain, store, k, path)
     _with_object(_structure, store, path)
 end
 
@@ -179,8 +193,7 @@ end
 
 function _check_structure(chain::LH5FileChain, file, k::Integer, path::AbstractString, expected)
     lock(() -> (k, path) in chain.checked, chain.lock) && return nothing
-    _structure(chain, file, k, path) == expected || throw(ArgumentError(
-        "\"$path\" in $(chain.filenames[k]) differs from $(chain.filenames[1]) in its datatype, units, codec, element type or size"))
+    _structure(chain, file, k, path) == expected || _differing_object(chain, k, path)
     lock(() -> push!(chain.checked, (k, path)), chain.lock)
     nothing
 end
@@ -270,7 +283,7 @@ function _file_table(part::_FileTablePart, file)
     lock(part.chain.lock) do
         get!(file.tables, (part.path, names)) do
             store = file.lhd.data_store
-            haskey(store, part.path) || _missing_object(part.chain, part.k, part.path)
+            _checked_kind(part.chain, store, part.k, part.path) == :group || _differing_object(part.chain, part.k, part.path)
             _lazy_table(store[part.path], names)
         end
     end
@@ -337,10 +350,15 @@ function _part_length(part::_FileTablePart)
     isempty(names) && return 0
     _with_file(chain, k) do file
         store = file.lhd.data_store
-        _object_kind(store, path) == :group || _missing_object(chain, k, path)
+        _checked_kind(chain, store, k, path) == :group || _differing_object(chain, k, path)
         _with_object(store, path) do table
             witness = _row_witness(chain, path, table, names)
-            isnothing(witness) && _missing_object(chain, k, _child_path(path, first(names)))
+            # Without one, the first column is missing or stored otherwise:
+            if isnothing(witness)
+                first_path = _child_path(path, first(names))
+                _checked_kind(chain, store, k, first_path)
+                _differing_object(chain, k, first_path)
+            end
             leaf, kind = witness
             kind == :dataset ? _with_object(_nrows, table, join(map(String, leaf), '/')) :
                 length(foldl(getproperty, leaf; init = _file_table(_FileTablePart(chain, k, path, names), file)))
@@ -419,7 +437,7 @@ _subpart(part::_FileTablePart, name::Symbol) = _FileTablePart(part.chain, part.k
 function Base.getindex(chain::LH5FileChain, path::AbstractString)
     obj = _with_file(chain, 1) do file
         store = file.lhd.data_store
-        haskey(store, path) || _missing_object(chain, 1, path)
+        isnothing(_object_kind(store, path)) && _missing_object(chain, 1, path)
         LH5Array(store[path])
     end
     if obj isa LH5LazyTable
