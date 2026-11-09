@@ -233,7 +233,7 @@ _first_block_state(::AbstractLH5Vector) = 1
 function _next_block(v::AbstractLH5Vector, i::Int)
     n = length(v)
     i > n && return nothing
-    stop = min(i + rows_per_block[] - 1, n)
+    stop = min(i + _rows_per_block() - 1, n)
     (v[i:stop], stop + 1)
 end
 
