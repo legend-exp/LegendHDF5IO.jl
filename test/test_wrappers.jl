@@ -106,6 +106,15 @@ struct AboveHalf end
                     @test setindex!(lhd, vofsimvec, "vofsimvec") |> isnothing
                     @test lhd["vofsimvec"][:] == vofsimvec
                 end
+                @testset "IO of ArrayOfSimilarArrays" begin
+                    # arrays of arrays with more than one dimension:
+                    for (name, A) in (("aosa_v", ArrayOfSimilarArrays{Float64, 1}(rand(3, 4, 5))),
+                            ("aosa_m", ArrayOfSimilarArrays{Float64, 2}(rand(3, 4, 5))),
+                            ("aosa_b", ArrayOfSimilarArrays{Bool, 1}(rand(Bool, 3, 4, 5))))
+                        lhd[name] = A
+                        @test lhd[name] == A
+                    end
+                end
                 @testset "IO of NamedTuple" begin
                     nt = (a=10, b=10.0u"mm")
                     @test setindex!(lhd, nt, "nt") |> isnothing

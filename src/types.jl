@@ -130,12 +130,15 @@ LH5Array(ds::HDF5.Dataset, AT::Type{<:AbstractArray{<:Enum}}) =
 return an `ArraysOfSimilarArrays` where the field `data` is a `LH5Array` 
 (see `ArraysOfSimilarArrays`)
 """
-LH5Array(ds::HDF5.Dataset, 
-::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity}}) = begin
-    VectorOfSimilarArrays(LH5Array(ds, AbstractArray{<:RealQuantity}))
+LH5Array(ds::HDF5.Dataset,
+::Type{<:AbstractArrayOfSimilarArrays{<:RealQuantity, M, N}}) where {M, N} = begin
+    data = LH5Array(ds, AbstractArray{<:RealQuantity})
+    ArrayOfSimilarArrays{eltype(data), M, N}(data)
 end
-LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArrayOfSimilarArrays{<:Bool}}) =
-    VectorOfSimilarArrays(LH5Array(ds, AbstractArray{<:Bool}))
+LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArrayOfSimilarArrays{<:Bool, M, N}}) where {M, N} = begin
+    data = LH5Array(ds, AbstractArray{<:Bool})
+    ArrayOfSimilarArrays{Bool, M, N}(data)
+end
 """
     LH5Array(ds::HDF5.Dataset, ::Type{<:NamedTuple{T}}) where T
 
