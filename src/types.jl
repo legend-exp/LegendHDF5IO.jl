@@ -1310,7 +1310,9 @@ end
 function create_entry(parent::LHDataStore, name::AbstractString,
     data::AbstractArray{T}; kwargs...) where {T<:Quantity}
 
-    create_entry(parent, name, _ustrip(data); kwargs...)
+    # A lazy array is read first, its unitless reinterpretation would be read
+    # element by element:
+    create_entry(parent, name, _ustrip(_materialize(data)); kwargs...)
     setdatatype!(parent.data_store[name], typeof(data))
     setunits!(parent.data_store[name], unit(T))
     nothing
