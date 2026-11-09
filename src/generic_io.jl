@@ -246,8 +246,6 @@ function _cumulative_length(A::VectorOfArrays)
     elem_ptr[(firstindex(elem_ptr) + 1):end] .- first(elem_ptr)
 end
 
-_cumulative_length(A::AbstractVector{<:AbstractArray}) = cumsum(length.(A))
-
 function _element_ptrs(clen::Vector{<:Integer})
     vcat([1], Int.(clen) .+ 1)
 end

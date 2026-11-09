@@ -1337,7 +1337,7 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     nothing
 end
 
-# write VectorOfVectors{<:RealQuantity}
+# write vectors of vectors
 function create_entry(parent::LHDataStore, name::AbstractString, 
     data::AbstractArray{<:AbstractArray{T, M}, N}; kwargs...) where {T, M, N}
 
@@ -1346,9 +1346,11 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     # TODO: Support vectors of multi-dimensional arrays
     M == 1 || throw(ArgumentError("Output of vectors of multi-dimensional" 
     *" arrays to HDF5 is not supported"))
-    create_entry(parent, "$name/flattened_data", flatview(data); kwargs...)
+    # Plain vectors of vectors have no flat view:
+    vov = data isa VectorOfArrays ? data : VectorOfVectors(data)
+    create_entry(parent, "$name/flattened_data", flatview(vov); kwargs...)
     create_entry(
-        parent, "$name/cumulative_length", _cumulative_length(data); kwargs...)
+        parent, "$name/cumulative_length", _cumulative_length(vov); kwargs...)
     setdatatype!(parent.data_store[name], typeof(data))
     nothing
 end
