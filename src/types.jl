@@ -30,12 +30,12 @@ LH5Array(ds::Union{HDF5.Dataset, HDF5.H5DataStore})
 
 ```julia
 julia> using HDF5
-julia> f = h5open("path/to/lh5/file", "r")
+julia> f = h5open("path/to/lh5/file", "r+")
 julia> lh = LH5Array(f["path/to/HDF5/Dataset"])
 [...]
 julia> x = lh[1:10]     # load the first 10 elements of the on-disk array
 [...]
-julia> append!(lh, x)   # append those 10 elements to the on-disk array
+julia> append!(lh, x)   # append them, the dataset must be chunked
 [...]
 ```
 """
@@ -90,7 +90,7 @@ _julia_eltype(ds::HDF5.Dataset) = _julia_eltype(eltype(ds))
 _julia_eltype(::Type{T}) where {T} = T
 _julia_eltype(::Type{<:Union{Cstring, HDF5.FixedString}}) = String
 """
-    LH5Array(ds::HDF5.H5DataStore, ::Type{<:Bool}) = begin
+    LH5Array(ds::HDF5.Dataset, ::Type{<:Bool})
 
 return a value with type Bool
 """
@@ -101,10 +101,10 @@ LH5Array(ds::HDF5.Dataset, ::Type{<:Bool}) = begin
     data > 0
 end
 """
-    LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Bool}}) = begin
+    LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Bool}})
 
-return a `LH5Array` with dimensions equal to that of `ds` and element type 
-`Bool`. Applying `getindex!` on `LH5Array{Bool}` will yield a BitArray.
+return a `LH5Array` with dimensions equal to that of `ds` and element type
+`Bool`. Reading from it gives an `Array{Bool}`.
 """
 LH5Array(ds::HDF5.Dataset, ::Type{<:AbstractArray{<:Bool}}) = begin
     units = getunits(ds)
@@ -743,7 +743,9 @@ end
 # DiskArrays 0.4.25 gives concatenations with a zero-length part the wrong
 # length or throws while merging the chunks (fixed upstream after 0.4.25), so
 # concatenations of LH5Arrays with other disk arrays refuse empty parts until
-# the fix is released. The repeated signatures keep the methods more specific
+# the fix is released. An LH5Array in the first two positions is caught, but
+# not one behind two other disk arrays, nor concatenations of views and lazy
+# broadcasts alone. The repeated signatures keep the methods more specific
 # than DiskArrays' and unambiguous among themselves and with the table guards:
 const _LH5VecOrMat = Union{LH5Array{<:Any, 1}, LH5Array{<:Any, 2}}
 const _DiskVecOrMat = Union{DiskArrays.AbstractDiskArray{<:Any, 1}, DiskArrays.AbstractDiskArray{<:Any, 2}}
@@ -1156,8 +1158,8 @@ _dataset_filters(compress::Symbol) =
     compress === :zstd ? HDF5.Filters.Filter[H5Zzstd.ZstdFilter(3)] :
     HDF5.Filters.Filter[HDF5.Filters.Shuffle(), HDF5.Filters.Deflate(3)]
 
-# The first array written is split evenly into chunks of at most the cap, so
-# that the chunks hold it without a partially filled one:
+# The first array written is split evenly into n chunks of at most the cap,
+# which leave fewer than n rows unused:
 function _chunk_length(::Type{T}, sz_inner, sz_outer::Integer, compress::Symbol) where {T}
     cap = compress === :none ? max_chunk_bytes[] : max_compressed_chunk_bytes[]
     # Variable-length elements like strings are stored as references in the chunk:

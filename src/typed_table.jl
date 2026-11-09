@@ -17,9 +17,10 @@ Rows are read from the selected columns only. Blocks of rows take the column
 types of the first part of a chain and convert those of the other parts, and
 a value that does not fit throws. The columns, `sel.e`, are the lazy columns
 of the table selected from, and a nested table, `sel.geds`, is a typed table
-of its selected columns whose type follows from the type of `sel`. A function
-broadcast over a typed table, `f.(sel)`, is an [`LH5LazyBroadcast`](@ref).
-`append!` refuses typed tables.
+of its selected columns whose type follows from the type of `sel`. A
+PropertyFunction broadcast over a typed table, `f.(sel)`, is an
+[`LH5LazyBroadcast`](@ref), unless `f` is a pure column accessor or a
+selection. `append!` refuses typed tables.
 """
 # The type of the table selected from is not a parameter, so that the type of
 # a selection and of its nested tables follows from the row and block types:

@@ -8,13 +8,15 @@ of file names returns one.
 
 `chain[path]` concatenates the table or array at `path` over all files, as
 an [`LH5ChainedTable`](@ref) for a table. Files are opened when they are read
-from, and at most `max_open` of them stay open. Objects from the chain stop
-working when the chain is closed.
+from, and at most `max_open` of them stay open. For an array, `chain[path]`
+needs its size in every file and so opens all of them right away, as does
+accessing a column of a chained table. Objects from the chain stop working
+when the chain is closed.
 
 The first file defines the structure: the column names of tables, and the
 datatypes, units, codecs, element types and inner sizes of what they hold.
-Other files are checked against it when a column is first read from them, so
-they need to agree only on what is read. Chains are read-only.
+Other files are checked against it when an array or column is first opened
+in them, so they need to agree only on what is used. Chains are read-only.
 """
 mutable struct LH5FileChain
     filenames::Vector{String}
