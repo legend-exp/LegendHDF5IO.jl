@@ -1127,6 +1127,8 @@ struct AboveHalf end
                 @test Tables.getcolumn(cols, 2) === tbl.b
                 @test Set(opened(tbl)) == Set([:a, :b])
                 @test isnothing(Tables.schema(cols))
+                @test Tables.columnindex(cols, :b) == 2 && Tables.columnindex(cols, :nope) == 0
+                @test Tables.columntype(cols, :b) == Int32
                 @test collect(Tables.columnnames(cols)) == [:a, :b, :vov]
                 @test [k for (k, v) in cols] == [:a, :b, :vov]
                 @test merge((x = 1,), cols).vov === tbl.vov
