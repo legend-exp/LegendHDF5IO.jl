@@ -243,6 +243,28 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
             end
         end
     end
+    @testset "haskey" begin
+        mktempdir() do dir
+            path = joinpath(dir, "haskey.lh5")
+            lh5open(path, "w") do lhd
+                lhd["t"] = StructArray((x = rand(3), sub = StructArray((c = rand(3),))))
+                lhd["grp/x"] = rand(2)
+            end
+            lh5open(path) do lhd
+                @test haskey(lhd, "t") && haskey(lhd, "t/sub") && haskey(lhd, "t/sub/c")
+                @test haskey(lhd, "/t/x") && haskey(lhd, "/")
+                @test !haskey(lhd, "nope") && !haskey(lhd, "t/nope") && !haskey(lhd, "")
+                # a path through a dataset leads to no object:
+                @test !haskey(lhd, "t/sub/c/z")
+                # an absolute path starts at the root of the file, also in a group:
+                grp = LHDataStore(lhd.data_store["grp"], false)
+                @test haskey(grp, "x") && haskey(grp, "/t") && haskey(grp, "/grp/x")
+                @test !haskey(grp, "/x") && !haskey(grp, "t")
+                @test grp["/t"] isa LegendHDF5IO.LH5LazyTable
+                @test_throws KeyError grp["/x"]
+            end
+        end
+    end
     @testset verbose=true "scattered reads" begin
         mktempdir(pwd()) do tmp
             path = joinpath(tmp, "tmp.lh5")
@@ -1875,6 +1897,7 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
             lh5open(fns; max_open = 2) do fc
                 @test fc isa LH5FileChain && isopen(fc)
                 @test haskey(fc, "t") && "arr" in keys(fc)
+                @test haskey(fc, "/t/sub/c") && !haskey(fc, "t/sub/c/z") && !haskey(fc, "nope")
                 t = fc["t"]
                 @test t isa LH5ChainedTable
                 # the first rows come from the first file, which is the only one opened:

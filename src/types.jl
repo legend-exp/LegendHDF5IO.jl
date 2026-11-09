@@ -1217,7 +1217,7 @@ end
 Base.isopen(f::LHDataStore) = isopen(f.data_store)
 Base.close(f::LHDataStore) = close(f.data_store)
 Base.keys(lh::LHDataStore) = keys(lh.data_store)
-Base.haskey(lh::LHDataStore, i::AbstractString) = haskey(lh.data_store, i)
+Base.haskey(lh::LHDataStore, i::AbstractString) = !isnothing(_object_kind(lh.data_store, i))
 Base.getindex(lh::LHDataStore, i::AbstractString) = LH5Array(lh.data_store[i])
 Base.getindex(lh::LHDataStore, i::Any, j::Any...) =
     getindex(lh, join(string.((i, j...)), "/"))

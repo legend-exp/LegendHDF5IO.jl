@@ -388,10 +388,10 @@ function _row_witness(chain::LH5FileChain, path::AbstractString, table, names, p
     fallback
 end
 
-# :dataset, :group, or nothing if there is no object at the path, without
+# :dataset, :group, or nothing if `store[path]` finds no object, without
 # failing on a path that leads through a dataset:
-_object_kind(store::HDF5.H5DataStore, path::AbstractString) =
-    _object_kind(store, split(path, '/'; keepempty = false))
+_object_kind(store::HDF5.H5DataStore, path::AbstractString) = isempty(path) ? nothing :
+    _object_kind(startswith(path, '/') ? HDF5.file(store) : store, split(path, '/'; keepempty = false))
 
 function _object_kind(store::HDF5.H5DataStore, names::AbstractVector{<:AbstractString})
     isempty(names) && return :group
