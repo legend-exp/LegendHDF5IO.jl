@@ -1396,6 +1396,8 @@ struct AboveHalf end
                 @test s isa LH5TypedTable && s.z === tb.x && s[:].z == 2 .* x
                 @test Tables.materializer(ta)((p = [1, 2],)) isa StructArray
                 @test Tables.materializer(ta)((p = ta.x,)) isa LH5JoinedTable
+                mb = Tables.materializer(ta)((p = (@pf $z * 2).(s), q = 1:n))
+                @test mb isa LH5JoinedTable && mb[2:3] == StructArray((p = 4 .* x[2:3], q = 2:3))
                 @test Tables.materializer(ta)(ta) === ta
                 jn = innermerge(lhd["n"], (q = x,))
                 @test jn.sub isa LH5LazyTable && jn[2].sub.w == x[2]

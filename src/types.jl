@@ -959,7 +959,7 @@ _keeps_identity(A::StructArray) = any(_keeps_identity, StructArrays.components(A
 
 # Columns that read from the file, which therefore must not outlive it:
 _reads_from_disk(::Any) = false
-_reads_from_disk(::Union{DiskArrays.AbstractDiskArray, AbstractLH5Table}) = true
+_reads_from_disk(::Union{DiskArrays.AbstractDiskArray, AbstractLH5Vector}) = true
 _reads_from_disk(A::Union{VectorOfArrays, ArrayOfSimilarArrays}) = _reads_from_disk(flatview(A))
 _reads_from_disk(A::StructArray) = any(_reads_from_disk, StructArrays.components(A))
 _reads_from_disk(A::Union{VectorOfEncodedArrays, VectorOfEncodedSimilarArrays}) = _reads_from_disk(A.encoded)
