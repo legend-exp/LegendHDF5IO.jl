@@ -79,6 +79,8 @@ end
     end
     @testset verbose=true "datatype string parsing" begin
         datatype_from_string = LegendHDF5IO.datatype_from_string
+        @test datatype_from_string("array<1>{encoded_array<1>{real}}") <: VectorOfEncodedArrays{<:RealQuantity, 1}
+        # as written by LegendHDF5IO 0.1:
         @test datatype_from_string("array_of_encoded_arrays<1,1>{real}") <: VectorOfEncodedArrays{<:RealQuantity, 1}
         @test datatype_from_string("array_of_encoded_equalsized_arrays<1,1>{real}") <: VectorOfEncodedSimilarArrays{<:RealQuantity, 1}
         @test_throws ErrorException datatype_from_string("array_of_encoded_arrays<2,1>{real}")

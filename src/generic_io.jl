@@ -98,6 +98,7 @@ function datatype_from_string(s::AbstractString)
                 # T isa Array || throw(ErrorException("Datatype \"$tp\" with \"array\" nested in \"array_of_equalsized_arrays\" currently not supported"))
                 AbstractArrayOfSimilarArrays{<:T,M,N}
             elseif tp == "array_of_encoded_arrays"
+                # Written by LegendHDF5IO 0.1 instead of "array<1>{encoded_array<M>{...}}":
                 length(dims) == 2 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]; M = dims[2]
                 N == 1 || throw(ErrorException("Only one-dimensional arrays of encoded arrays are supported"))
@@ -116,7 +117,12 @@ function datatype_from_string(s::AbstractString)
             elseif tp == "array"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
-                _array_type(Array{T, N})
+                if N == 1 && T <: EncodedArray
+                    # Encoded vectors of vectors are stored as one group, not element by element:
+                    VectorOfEncodedArrays{<:_eldatatype_from_string(match(datatype_regexp, eltp)[6]), ndims(T)}
+                else
+                    _array_type(Array{T, N})
+                end
             elseif tp == "encoded_array"
                 length(dims) == 1 || throw(ErrorException("Invalid dims $dims for datatype \"$tp\""))
                 N = dims[1]
@@ -225,7 +231,7 @@ _datatype_to_string_impl(::Type{<:ArrayOfSimilarArrays{T,M,N}}) where {T,M,N} =
     "array_of_equalsized_arrays<$N,$M>$(_inner_datatype_to_string(T))"
 
 _datatype_to_string_impl(::Type{<:VectorOfEncodedArrays{T,N}}) where {T,N} =
-    "array_of_encoded_arrays<1,$N>$(_inner_datatype_to_string(T))"
+    "array<1>{encoded_array<$N>$(_inner_datatype_to_string(T))}"
 
 _datatype_to_string_impl(::Type{<:VectorOfEncodedSimilarArrays{T,M}}) where {T,M} =
     "array_of_encoded_equalsized_arrays<1,$M>$(_inner_datatype_to_string(T))"

@@ -92,6 +92,16 @@ end
         vov_enc2 = _roundtrip(vov_enc)
         @test vov_enc2 == vov_enc
         @test eltype(eltype(vov_enc2)) == Int16
+        vov_rs = broadcast(|>, VectorOfVectors([Int16.(1000 .+ rand(-50:50, rand(10:20))) for _ in 1:10]),
+            LegendDataTypes.RadwareSigcompress(1000))
+        mktempdir(pwd()) do tmp
+            HDF5.h5open(joinpath(tmp, "tmp.h5"), "w") do f
+                writedata(f, "x", vov_rs)
+                @test HDF5.read_attribute(f["x"], "datatype") == "array<1>{encoded_array<1>{real}}"
+                @test read(f, "x/decoded_size") == length.(vov_rs)
+                @test readdata(f, "x") == vov_rs
+            end
+        end
 
         vosv = VectorOfSimilarVectors(rand(Int32(-5):Int32(5), 20, 10))
         vosv_enc = broadcast(|>, vosv, codec)

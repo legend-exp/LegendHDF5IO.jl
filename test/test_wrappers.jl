@@ -33,6 +33,17 @@ CountedReads(data) = CountedReads(collect(data), Ref(0))
 Base.length(v::CountedReads) = length(v.data)
 LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idxs])
 
+# LegendHDF5IO 0.1 wrote encoded vectors of vectors with another datatype and the decoded lengths as 1-tuples:
+function to_v01_encoded!(lhd, path)
+    grp = lhd.data_store[path]
+    lengths = read(grp, "decoded_size")
+    HDF5.delete_object(grp, "decoded_size")
+    lhd["$path/decoded_size"] = [(Int(n),) for n in lengths]
+    HDF5.delete_attribute(grp, "datatype")
+    HDF5.attributes(grp)["datatype"] = "array_of_encoded_arrays<1,1>{real}"
+    close(grp)
+end
+
 @testset verbose=true "test wrapper" begin
     @testset verbose=true "reading and writing" begin
         mktempdir(pwd()) do tmp
@@ -180,6 +191,39 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                     vofvec_enc = broadcast(|>, vofvec, codec)
                     @test setindex!(lhd, vofvec_enc, "vofvec_enc") |> isnothing
                     @test lhd["vofvec_enc"][:] == vofvec_enc
+                    # written with the datatype of the LH5 specification and a vector of decoded lengths:
+                    wfs = [Int16.(1000 .+ rand(-50:50, n)) for n in rand(10:100, 20)]
+                    wfs_enc = broadcast(|>, VectorOfArrays(wfs), RadwareSigcompress(1000))
+                    lhd["wfs_enc"] = wfs_enc
+                    grp = lhd.data_store["wfs_enc"]
+                    @test HDF5.read_attribute(grp, "datatype") == "array<1>{encoded_array<1>{real}}"
+                    @test HDF5.read_attribute(grp["decoded_size"], "datatype") == "array<1>{real}"
+                    @test eltype(grp["decoded_size"]) <: Integer && read(grp["decoded_size"]) == length.(wfs)
+                    close(grp)
+                    @test lhd["wfs_enc"][:] isa VectorOfEncodedArrays{Int16, 1, RadwareSigcompress}
+                    @test lhd["wfs_enc"][:] == wfs_enc
+                    lhd["wfs_enc_old"] = wfs_enc
+                    to_v01_encoded!(lhd, "wfs_enc_old")
+                    @test size(lhd.data_store["wfs_enc_old/decoded_size"]) == (1, length(wfs))
+                    @test lhd["wfs_enc_old"][:] isa VectorOfEncodedArrays{Int16, 1, RadwareSigcompress}
+                    @test lhd["wfs_enc_old"][:] == wfs_enc
+                    # as written by legend-pydataobj, with uint32 lengths and without a decoded element type:
+                    lhd["wfs_enc_py/encoded_data"] = wfs_enc.encoded
+                    grp = lhd.data_store["wfs_enc_py"]
+                    grp["decoded_size"] = UInt32.(length.(wfs))
+                    HDF5.attributes(grp["decoded_size"])["datatype"] = "array<1>{real}"
+                    HDF5.attributes(grp)["datatype"] = "array<1>{encoded_array<1>{real}}"
+                    HDF5.attributes(grp)["codec"] = "radware_sigcompress"
+                    HDF5.attributes(grp)["codec_shift"] = Int32(1000)
+                    close(grp)
+                    @test lhd["wfs_enc_py"][:] isa VectorOfEncodedArrays{<:Integer, 1, RadwareSigcompress}
+                    @test lhd["wfs_enc_py"][:] == wfs
+                    # waveforms of different lengths with encoded samples:
+                    trngs = [range(0.0u"μs", step = 16.0u"ns", length = length(w)) for w in wfs]
+                    wf_enc = ArrayOfRDWaveforms((trngs, wfs_enc))
+                    lhd["wf_enc"] = StructArray((e = rand(length(wfs)), wf = wf_enc))
+                    @test lhd["wf_enc"][:].wf == wf_enc
+                    @test lhd["wf_enc"].wf.signal isa VectorOfEncodedArrays{Int16, 1, RadwareSigcompress}
                 end
                 @testset "IO of VectorOfEncodedSimilarArrays" begin
                     codec = VarlenDiffArrayCodec()
@@ -188,6 +232,12 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                     vofsimvec_enc = broadcast(|>, vofsimvec, codec)
                     @test setindex!(lhd, vofsimvec_enc, "vofsimvec_enc") |> isnothing
                     @test lhd["vofsimvec_enc"][:] == vofsimvec_enc
+                    # the decoded length is a scalar, as legend-pydataobj writes it:
+                    grp = lhd.data_store["vofsimvec_enc"]
+                    @test HDF5.read_attribute(grp, "datatype") == "array_of_encoded_equalsized_arrays<1,1>{real}"
+                    @test HDF5.read_attribute(grp["decoded_size"], "datatype") == "real"
+                    @test read(grp, "decoded_size") === 100
+                    close(grp)
                 end
                 @testset "IO of ArrayOfRDWaveforms" begin
                     data = VectorOfSimilarVectors(rand(UInt16, 50, 50)*u"m")
@@ -1981,6 +2031,25 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                 @test_throws ArgumentError t.e
             end
             lh5open(cs[[1, 3]]) do fc
+                @test_throws ArgumentError fc["t"][3:4]
+            end
+            # encoded columns written by LegendHDF5IO 0.1 differ in their datatype from newer ones:
+            vs = [joinpath(dir, "v01_$i.lh5") for i in 1:2]
+            for fn in vs
+                lh5open(fn, "w") do lhd
+                    lhd["t"] = StructArray((e = broadcast(|>, VectorOfArrays([Int16.(rand(-5:5, rand(10:20))) for _ in 1:2]), RadwareSigcompress(1000)),))
+                end
+            end
+            lh5open(lhd -> to_v01_encoded!(lhd, "t/e"), vs[2], "r+")
+            es_v = [lh5open(lhd -> lhd["t"][:].e, fn) for fn in vs]
+            lh5open(vs) do fc
+                t = fc["t"]
+                @test t[1:2].e == es_v[1]
+                @test_throws ArgumentError t[3:4]
+                @test_throws ArgumentError t.e
+            end
+            lh5open(reverse(vs)) do fc
+                @test fc["t"][1:2].e == es_v[2]
                 @test_throws ArgumentError fc["t"][3:4]
             end
             # a selection over a file chain opens the first file only, and fixes the row type there:
