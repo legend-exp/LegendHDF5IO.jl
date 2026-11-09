@@ -30,26 +30,35 @@ Base.Broadcast.broadcasted(pf::PropSelFunction{<:PPaths, names}, tbl::AbstractLH
 Base.Broadcast.broadcasted(::PropSelFunction{Tuple{}}, ::AbstractLH5Table) =
     throw(ArgumentError("A selection needs at least one column"))
 
-# Over a typed table, a function broadcasts block by block with an inferable
-# element type, a column accessor returns the column and a selection stays a
-# selection. The repeated signatures resolve the ambiguities with
-# PropertyFunctions' methods and the selection methods above:
-Base.Broadcast.broadcasted(pf::PropertyFunction, tbl::LH5TypedTable) = _typed_broadcast(pf, tbl)
-Base.Broadcast.broadcasted(pf::PropertyFunction{Tuple{}}, tbl::LH5TypedTable) = _typed_broadcast(pf, tbl)
-Base.Broadcast.broadcasted(pf::PropSelFunction{<:PPaths, names}, tbl::LH5TypedTable) where {names} =
-    LH5TypedTable(tbl, names, map(_path, input_property_paths(pf)))
-Base.Broadcast.broadcasted(::PropSelFunction{Tuple{}}, ::LH5TypedTable) =
-    throw(ArgumentError("A selection needs at least one column"))
+# Any other function broadcasts block by block over a typed table of the
+# columns it uses, and a column accessor returns the column. The second
+# method resolves the ambiguity with PropertyFunctions' method for functions
+# without properties:
+Base.Broadcast.broadcasted(pf::PropertyFunction, tbl::AbstractLH5Table) = _lazy_broadcast(pf, tbl)
+Base.Broadcast.broadcasted(pf::PropertyFunction{Tuple{}}, tbl::AbstractLH5Table) = _lazy_broadcast(pf, tbl)
 
-_typed_broadcast(pf::PropertyFunction, tbl::LH5TypedTable) = LH5LazyBroadcast(pf, tbl, _used_columns(tbl, pf))
+_lazy_broadcast(pf::PropertyFunction, tbl::AbstractLH5Table) = _lazy_broadcast(pf, tbl, _used_columns(tbl, pf))
+_lazy_broadcast(pf::PropertyFunction{<:PPaths, <:PPath}, tbl::AbstractLH5Table) =
+    foldl(getproperty, _path(only(input_property_paths(pf))); init = tbl)
 
-# The columns of `tbl` that `pf` reads, as a selection; a function without
-# properties reads none, but needs the rows to count:
+# The element type follows from the type of a typed table, and from the
+# columns read otherwise:
+_lazy_broadcast(pf, tbl::LH5TypedTable, used::LH5TypedTable) = LH5LazyBroadcast(pf, tbl, used)
+_lazy_broadcast(pf, ::AbstractLH5Table, used::LH5TypedTable) = LH5LazyBroadcast(pf, used)
+
+# The columns of `tbl` that `pf` reads, as a typed table. Nested tables hold
+# the columns read only. A function without properties reads none, but needs
+# the rows to count, from the whole of a typed table or from the first column:
 function _used_columns(tbl::LH5TypedTable, pf::PropertyFunction)
     paths = map(_path, input_property_paths(pf))
     isempty(paths) ? tbl : _select(tbl, _selection_tree(paths))
 end
-_typed_broadcast(pf::PropertyFunction{<:PPaths, <:PPath}, tbl::LH5TypedTable) =
-    foldl(getproperty, _path(only(input_property_paths(pf))); init = tbl)
+
+function _used_columns(tbl::AbstractLH5Table, pf::PropertyFunction)
+    paths = map(_path, input_property_paths(pf))
+    isempty(paths) && (paths = ((first(propertynames(tbl)),),))
+    heads = (unique(map(first, paths))...,)
+    LH5TypedTable(_select(tbl, _selection_tree(paths)), heads, map(head -> (head,), heads))
+end
 
 end # module LegendHDF5IOPropertyFunctionsExt

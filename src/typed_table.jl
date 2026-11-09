@@ -19,8 +19,9 @@ a value that does not fit throws. The columns, `sel.e`, are the lazy columns
 of the table selected from, and a nested table, `sel.geds`, is a typed table
 of its selected columns whose type follows from the type of `sel`. A
 PropertyFunction broadcast over a typed table, `f.(sel)`, is an
-[`LH5LazyBroadcast`](@ref), unless `f` is a pure column accessor or a
-selection. `append!` refuses typed tables.
+[`LH5LazyBroadcast`](@ref) whose type follows from the type of `sel`, unless
+`f` is a pure column accessor or a selection. `append!` refuses typed
+tables.
 """
 # The type of the table selected from is not a parameter, so that the type of
 # a selection and of its nested tables follows from the row and block types:

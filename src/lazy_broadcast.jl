@@ -3,13 +3,20 @@
 """
     LH5LazyBroadcast{T} <: AbstractLH5Vector{T}
 
-A function broadcast lazily over a typed table: `f.(sel)` for a
-PropertyFunction `f` and an [`LH5TypedTable`](@ref) `sel` returns one. It
-reads nothing until it is indexed or iterated, then reads the rows of `sel`
-it needs, in blocks when iterated, and applies `f` to them. The element type
-`T` is inferred from `f` and the row type of `sel`, so `f.(sel)` and its
-elements have inferable types. Pure column accessors, `(@pf \$energy).(sel)`,
-return the column instead, and selections return typed tables.
+A function broadcast lazily over a lazy table: `f.(tbl)` for a
+PropertyFunction `f` and an [`AbstractLH5Table`](@ref) `tbl` returns one. It
+reads nothing until it is indexed or iterated, then reads the rows it needs
+of the columns `f` uses, in blocks when iterated, and applies `f` to them.
+Pure column accessors, `(@pf \$energy).(tbl)`, return the column instead,
+and selections return typed tables.
+
+The element type `T` is inferred from `f` and the row type. Over an
+[`LH5TypedTable`](@ref) `sel`, that makes `f.(sel)` and its elements
+inferable. Over other tables, the row type is fixed from the columns `f`
+uses as for a selection, which opens the first file of a chain only. Where
+inference gives no element type, `f` is applied to the first block of rows,
+and the type of the result is that of all blocks: the other blocks are
+converted to it, which throws for blocks that do not convert.
 """
 # The type carries what `f` returns for a block of rows, `RB`, so that reads
 # infer, and not the type of the table, so that the table read from can be
@@ -27,22 +34,47 @@ columns of `tbl` that `f` uses.
 """
 function LH5LazyBroadcast(f, tbl::LH5TypedTable{R, B}, reads::LH5TypedTable = tbl) where {R, B}
     RB = Base.promote_op(_broadcast, typeof(f), B)
-    LH5LazyBroadcast{_array_eltype(RB), typeof(f), RB}(f, reads)
+    isconcretetype(RB) && RB <: AbstractArray ? LH5LazyBroadcast{eltype(RB), typeof(f), RB}(f, reads) :
+        _uninferred_broadcast(f, reads, RB)
 end
 
 _broadcast(f, rows) = Broadcast.materialize(Broadcast.broadcasted(f, rows))
 
-# The element type of an inferred array type, Any where inference gives none:
-_array_eltype(::Type{A}) where {A} = A !== Union{} && A <: AbstractArray ? eltype(A) : Any
+# Inferred as a union of array types, the blocks give the union of their
+# element types. Otherwise, all blocks take the type of the first, which an
+# empty table does not have:
+function _uninferred_broadcast(f, reads::LH5TypedTable, RB::Type)
+    # TODO: Base.uniontypes is not public Julia API, other solution possible?
+    types = Base.uniontypes(RB)
+    if RB !== Union{} && all(A -> isconcretetype(A) && A <: AbstractArray, types)
+        LH5LazyBroadcast{Union{map(eltype, types)...}, typeof(f), RB}(f, reads)
+    else
+        next = _next_block(reads, _first_block_state(reads))
+        isnothing(next) && return LH5LazyBroadcast{Any, typeof(f), Any}(f, reads)
+        FB = typeof(_broadcast(f, first(next)))
+        LH5LazyBroadcast{eltype(FB), typeof(f), FB}(f, reads)
+    end
+end
+
+# Only blocks typed by the first block can need converting:
+function _block_result(::LH5LazyBroadcast{T, F, RB}, x) where {T, F, RB}
+    x isa RB && return x
+    try
+        convert(RB, x)::RB
+    catch err
+        err isa Union{MethodError, InexactError} || rethrow()
+        throw(ArgumentError("A broadcast that does not infer takes its type from the result for the first block of rows, $RB, but the result for other rows is a $(typeof(x))"))
+    end
+end
 
 Base.length(bc::LH5LazyBroadcast) = length(bc.table)
-_getindex_rows(bc::LH5LazyBroadcast{T, F, RB}, idxs) where {T, F, RB} = _broadcast(bc.f, bc.table[idxs])::RB
+_getindex_rows(bc::LH5LazyBroadcast, idxs) = _block_result(bc, _broadcast(bc.f, bc.table[idxs]))
 _first_block_state(bc::LH5LazyBroadcast) = _first_block_state(bc.table)
 
 # The state is that of the typed table the broadcast reads from:
-function _next_block(bc::LH5LazyBroadcast{T, F, RB}, state::_TypedState) where {T, F, RB}
+function _next_block(bc::LH5LazyBroadcast, state::_TypedState)
     next = _next_block(bc.table, state)
-    isnothing(next) ? nothing : (_broadcast(bc.f, first(next))::RB, last(next))
+    isnothing(next) ? nothing : (_block_result(bc, _broadcast(bc.f, first(next))), last(next))
 end
 
 Base.broadcastable(bc::LH5LazyBroadcast) = bc[:]
