@@ -644,6 +644,19 @@ struct AboveHalf end
                 @test HDF5.get_create_properties(lhd.data_store["x"]).chunk == (2^20,)
                 @test HDF5.get_create_properties(lhd.data_store["big"]).chunk == (2^24,)
             end
+            # empty arrays are chunked as well, so they can be appended to:
+            lh5open(joinpath(tmp, "empty.lh5"), "cw"; compress = :zstd) do lhd
+                lhd["e"] = Float64[]
+                append!(lhd["e"], [1.0, 2.0])
+                @test lhd["e"][:] == [1.0, 2.0]
+                tbl = StructArray((hits = VectorOfVectors([Float64[], Float64[]]), e = [1.0, 2.0]))
+                lhd["t"] = tbl
+                append!(lhd["t"], tbl)
+                @test lhd["t"][:] == vcat(tbl, tbl)
+                # HDF5 cannot chunk zero-sized inner dimensions:
+                @test_throws ArgumentError lhd["m"] = zeros(0, 4)
+                @test !haskey(lhd, "m")
+            end
         end
     end
     @testset verbose=true "test append functionality" begin
