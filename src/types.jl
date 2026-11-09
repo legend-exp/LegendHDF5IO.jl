@@ -253,7 +253,8 @@ LH5Array(ds::HDF5.H5DataStore, ::Type{<:AbstractEncodedArray{<:RealQuantity, 1}}
     U = eltype(ds["sample_data"])
     codec_name = Symbol(getattribute(ds, :codec, String))
     C = LegendDataTypes.array_codecs.by_name[codec_name]
-    EncodedArray{U}(C(), size_vec_in, data)
+    codec = read_from_properties(getattribute, ds, C)
+    EncodedArray{U}(codec, size_vec_in, data)
 end
 """
     LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedArrays{T, 1} where {T}})

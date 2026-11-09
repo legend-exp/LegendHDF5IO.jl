@@ -144,6 +144,10 @@ struct AboveHalf end
                     x_enc = rand(-5:5, 50) |> codec
                     @test setindex!(lhd, x_enc, "x_enc") |> isnothing
                     @test lhd["x_enc"] == x_enc
+                    # codecs are read with their parameters:
+                    x_rs = Int16[1000, 1003, 1010, 990, 1005] |> RadwareSigcompress(1000)
+                    lhd["x_rs"] = x_rs
+                    @test lhd["x_rs"] == x_rs
                 end
                 @testset "IO of VectorOfEncodedArrays" begin
                     codec = VarlenDiffArrayCodec()
