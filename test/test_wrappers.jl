@@ -628,6 +628,29 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
         end
     end
 
+    @testset "aliased in-place writes" begin
+        mktempdir() do dir
+            lh5open(joinpath(dir, "alias.lh5"), "w"; usechunks = true) do lhd
+                lhd["v"] = collect(1.0:10.0)
+                append!(lhd["v"], collect(11.0:30.0))
+                V = lhd["v"]
+                # a source that reads the destination would read chunks the write has changed:
+                @test_throws ArgumentError V .= reverse(V)
+                @test_throws ArgumentError copyto!(V, reverse(V))
+                @test_throws ArgumentError V .= V .+ reverse(V)
+                @test_throws ArgumentError V .= reverse(lhd["v"])
+                @test_throws ArgumentError view(V, 1:10) .= view(V, 20:29)
+                @test V[:] == 1.0:30.0
+                # the destination itself, other datasets and arrays read first are fine:
+                V .= V .+ 1
+                V[:] = reverse(V)
+                @test V[1:3] == [31.0, 30.0, 29.0]
+                lhd["w"] = collect(1.0:30.0)
+                V .= lhd["w"] .* 2
+                @test V[:] == 2 .* (1.0:30.0)
+            end
+        end
+    end
     @testset verbose=true "compressed writing" begin
         mktempdir(pwd()) do tmp
             HDF5.h5open(joinpath(tmp, "modes.lh5"), "w") do f

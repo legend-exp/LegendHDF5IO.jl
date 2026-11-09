@@ -704,7 +704,13 @@ end
 
 function Base.copyto!(dest::LH5SubDiskArray, bc::Base.Broadcast.Broadcasted{Nothing})
     _check_view_indices(dest)
+    _check_not_aliased(dest, bc)
     invoke(copyto!, Tuple{DiskArrays.AbstractDiskArray, Base.Broadcast.Broadcasted{Nothing}}, dest, bc)
+end
+function Base.copyto!(dest::LH5DiskArray, bc::Base.Broadcast.Broadcasted{DiskArrays.ChunkStyle{N}}) where {N}
+    dest isa LH5SubDiskArray && _check_view_indices(dest)
+    _check_not_aliased(dest, bc)
+    invoke(copyto!, Tuple{AbstractArray, Base.Broadcast.Broadcasted{DiskArrays.ChunkStyle{N}}}, dest, bc)
 end
 function Base.fill!(dest::LH5SubDiskArray, v)
     _check_view_indices(dest)
@@ -712,14 +718,37 @@ function Base.fill!(dest::LH5SubDiskArray, v)
 end
 # copyto! into a disk array funnels through _disk_copyto!, which has methods
 # with and without matching dimensions:
-function DiskArrays._disk_copyto!(dest::LH5SubDiskArray{<:Any, N}, src::AbstractArray{<:Any, N}) where {N}
-    _check_view_indices(dest)
+function DiskArrays._disk_copyto!(dest::Union{LH5Array{<:Any, N}, LH5SubDiskArray{<:Any, N}}, src::AbstractArray{<:Any, N}) where {N}
+    dest isa LH5SubDiskArray && _check_view_indices(dest)
+    _check_not_aliased(dest, src)
     invoke(DiskArrays._disk_copyto!, Tuple{AbstractArray{<:Any, N}, AbstractArray{<:Any, N}}, dest, src)
 end
-function DiskArrays._disk_copyto!(dest::LH5SubDiskArray, src::AbstractArray)
-    _check_view_indices(dest)
+function DiskArrays._disk_copyto!(dest::LH5DiskArray, src::AbstractArray)
+    dest isa LH5SubDiskArray && _check_view_indices(dest)
+    _check_not_aliased(dest, src)
     invoke(DiskArrays._disk_copyto!, Tuple{AbstractArray, AbstractArray}, dest, src)
 end
+
+# DiskArrays writes a broadcast or copy chunk by chunk, so a source that reads
+# the destination would read chunks the write has changed already. The
+# destination itself is fine, each of its elements is read before it is
+# written; another array over the same dataset is not:
+function _check_not_aliased(dest, src)
+    _reads_from(src, _object_key(_dataset(dest)), dest) && throw(ArgumentError(
+        "The source of an in-place write reads from the dataset it writes to, read it first with [:]"))
+end
+_dataset(A::LH5Array) = A.file
+_dataset(A::LH5SubDiskArray) = parent(A).file
+# `dest` exempts the destination as a direct source or broadcast argument,
+# where elements line up; behind a view or a concatenation they do not:
+_reads_from(A::LH5Array, key, dest) = A !== dest && A.key == key
+_reads_from(bc::Base.Broadcast.Broadcasted, key, dest) = any(arg -> _reads_from(arg, key, dest), bc.args)
+_reads_from(x::Base.Broadcast.Extruded, key, dest) = _reads_from(x.x, key, dest)
+_reads_from(A::DiskArrays.BroadcastDiskArray, key, dest) = _reads_from(A.broadcasted, key, dest)
+_reads_from(A::DiskArrays.ConcatDiskArray, key, dest) = any(a -> _reads_from(a, key, nothing), A.parents)
+_reads_from(A::LH5ChainedArray, key, dest) = _reads_from(A.parts, key, nothing)
+_reads_from(A::AbstractArray, key, dest) = (p = parent(A); p === A ? false : _reads_from(p, key, nothing))
+_reads_from(::Any, key, dest) = false
 
 # Resolves the ambiguity with EncodedArrays' setindex! for whole-array writes:
 Base.setindex!(lh::LH5Array{T, 1}, v::EncodedArray, ::Colon) where {T} =
