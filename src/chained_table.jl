@@ -200,7 +200,7 @@ function _next_block(tbl::LH5ChainedTable, state::Tuple{Int, Int})
     k > length(_chain_parts(tbl)) && return nothing
     n = _part_length(tbl, k)
     read == n && return _next_block(tbl, (k + 1, 0))
-    stop = min(read + rows_per_block[], n)
+    stop = min(read + _rows_per_block(), n)
     (_read_rows(tbl, k, read + 1:stop), (k, stop))
 end
 

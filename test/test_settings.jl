@@ -92,6 +92,11 @@ using LegendHDF5IO: max_chunk_bytes, max_compressed_chunk_bytes, usechunks, comp
                     @test length(first(LegendHDF5IO._next_block(t, LegendHDF5IO._first_block_state(t)))) == 300
                 end
             end
+            # blocks without rows would never end an iteration:
+            @with rows_per_block => 0 begin
+                lh5open(fc -> @test_throws(ArgumentError, iterate(fc["t"])), fns)
+                lh5open(lhd -> @test_throws(ArgumentError, iterate(lhd["t"])), first(fns))
+            end
         end
     end
 end

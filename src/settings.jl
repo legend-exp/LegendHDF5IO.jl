@@ -105,3 +105,10 @@ Number of rows that iteration over a lazy table reads at a time, 4096 by
 default. A setting, see the [Settings](@ref) section of the guide.
 """
 const rows_per_block = _setting(Int, "rows_per_block", 4096)
+
+# Blocks without rows would never end an iteration:
+function _rows_per_block()
+    n = rows_per_block[]
+    n >= 1 || throw(ArgumentError("rows_per_block must be at least 1"))
+    n
+end
