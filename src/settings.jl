@@ -36,11 +36,11 @@ const compress = _setting(Symbol, "compress", :none; f_conv = _compress_or_bool)
 
 Size in bytes up to which the first array written to a chunked, uncompressed
 dataset sets the chunk size, 16 MiB by default. A larger first write is
-split evenly into chunks of at most this size, so it wastes no space, and an
-append then wastes at most one partially filled chunk. The default suits the
-block sizes of cluster file systems and does not depend on the file system,
-so that files written on one system read well on others. A setting, see the
-[Settings](@ref) section of the guide.
+split evenly into n chunks of at most this size, which leave fewer than n
+rows unused, and an append then wastes at most one partially filled chunk.
+The default suits the block sizes of cluster file systems and does not
+depend on the file system, so that files written on one system read well on
+others. A setting, see the [Settings](@ref) section of the guide.
 """
 const max_chunk_bytes = _setting(Int, "max_chunk_bytes", 2^24)
 

@@ -38,10 +38,15 @@ broadcasts over `LH5Array`s are lazy and evaluated the same way when collected
 or written. Arithmetic, `vcat`, `reverse` and `diff` return such lazy arrays
 as well, which read from the file on access and stop working once it is
 closed. `map` is eager, as in Base. Broadcasts that expand an `LH5Array` along
-a singleton dimension or add dimensions are not supported by DiskArrays yet,
-nor is `vcat` with an empty `LH5Array`. Read such data with `[:]` first. Empty
-`LH5Array`s also need to be read first for reductions without an `init` value,
-such as `sum` or `findall`, and for broadcasts that combine several of them.
+a singleton dimension or add dimensions to it work if another `LH5Array` spans
+that dimension. If only in-memory arrays do, DiskArrays does not support them
+yet: they give wrong data or throw when collected, reduced or written. Nor
+does it support lazy concatenations with an empty part: `vcat`, `hcat` and
+`cat` refuse them if an `LH5Array` is among the first two arguments, while
+concatenations of views and lazy broadcasts of `LH5Array`s otherwise have the
+wrong length or throw. Read such data with `[:]` first. Empty `LH5Array`s also
+need to be read first for reductions without an `init` value, such as `sum` or
+`findall`, and for broadcasts that combine several of them.
 
 Datasets opened for writing can be modified in place within their current
 size (`E[1:10] = ...`), and `append!` grows them. Nested structures
@@ -131,7 +136,7 @@ vector, iteration and `filterby` have inferable types. The columns of a typed
 table, `sel.e`, are the lazy columns of the table it selects from, while a
 nested table, `sel.geds`, is a typed table of its selected columns, whose type
 follows from the type of `sel`, so `sel.geds.<TAB>` completes in the REPL. A
-function broadcast over a typed table, `(@pf $e^2).(sel)`, returns an
+PropertyFunction broadcast over a typed table, `(@pf $e^2).(sel)`, returns an
 [`LH5LazyBroadcast`](@ref): a lazy vector that reads the rows it needs and
 applies the function to them block by block, with the element type inferred
 from the row type, so the broadcast has an inferable type as well.
@@ -160,8 +165,11 @@ reading them.
 
 `append!` refuses joined and chained tables. Writing to a column of a joined
 table writes to the table it comes from, while the columns of a chained table
-are read-only. Concatenating lazy tables with other arrays, and `hcat`, are
-refused.
+are read-only if they read from disk. Its columns held in memory, such as
+those read eagerly, accept writes, which do not reach the files.
+Concatenating lazy tables with other arrays, and `hcat`, are refused if a
+table is among the first two arguments. A table behind two other arrays is
+concatenated row by row into an `Array`.
 
 ### Reading many files
 
@@ -178,11 +186,14 @@ end
 ```
 
 Files are opened when they are read from, and at most `max_open` of them stay
-open, by default the setting [`LegendHDF5IO.max_open`](@ref), 64. The first file defines the structure: column names,
-datatypes, units, codecs, element types and inner sizes. Another file is
-checked against it when a column is first read from it, so the files need to
-agree only on what is read. A difference throws an `ArgumentError` that names
-the file. Objects from the chain stop working when it is closed.
+open, by default the setting [`LegendHDF5IO.max_open`](@ref), 64. Indexing the
+chain with the path of an array opens every file right away, as does accessing
+a column of a chained table, since chaining them needs their sizes in all
+files. The first file defines the structure: column names, datatypes, units,
+codecs, element types and inner sizes. Another file is checked against it
+when an array or column is first opened in it, so the files need to agree
+only on what is used. A difference throws an `ArgumentError` that names the
+file. Objects from the chain stop working when it is closed.
 
 ### Appending and compression
 
@@ -288,6 +299,8 @@ reader and a writer. Register from the `__init__` function of your module or
 package extension, since the registry is not part of the precompilation cache:
 
 ```julia
+using HDF5
+
 struct ChannelNo
     no::Int
 end
@@ -346,7 +359,8 @@ selections return [`LH5TypedTable`](@ref)s, lazy tables with a fixed row type,
 where 0.1 returned `Table`s of the lazy columns.
 
 `LH5Array` is now a DiskArray: broadcasts over it are lazy and read when
-collected or written, while `map` is eager. [`add_entries!`](@ref) takes the
+collected or written, while `map` is eager. Reading Bool arrays gives an
+`Array{Bool}` instead of a `BitArray`. [`add_entries!`](@ref) takes the
 file, the table name and the new columns, without the destination argument.
 Custom types register their LH5 datatype with
 `LegendHDF5IO.register_datatype!` instead of extending `datatype_to_string`.

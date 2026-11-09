@@ -12,7 +12,9 @@ Rows are read from the parts that hold them, so `first(tbl, n)` reads the
 first parts only. Accessing a column concatenates the columns of all parts
 lazily, which opens the column in each part. The parts must have the same
 columns, and rows take the column order of the first part. Chained tables
-and their columns are read-only.
+are read-only, as are their columns that read from disk. Columns held in
+memory, such as those read eagerly, accept writes, which do not reach the
+files.
 """
 struct LH5ChainedTable <: AbstractLH5Table{NamedTuple}
     parts::Vector{Any}

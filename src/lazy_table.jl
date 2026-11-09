@@ -41,10 +41,13 @@ tables.
 Treating the table as an array opens all columns. Indexing with a range,
 index vector or mask reads the selected rows into a `StructArray`, and
 iteration reads the rows in blocks, as described for
-[`AbstractLH5Vector`](@ref). `vcat` of lazy tables chains them, and concatenation with other arrays is refused. So are
-`StructArray(tbl)` and `TypedTables.Table(tbl)`: they would append through
-the columns without the table's checks, and a `StructArray` of a column read
-eagerly would slice and append rows with a stale row type.
+[`AbstractLH5Vector`](@ref). `vcat` of lazy tables chains them.
+Concatenation with other arrays is refused if a table is among the first two
+arguments. A table behind two other arrays is concatenated row by row.
+`StructArray(tbl)` and `TypedTables.Table(tbl)` are refused as well: they
+would append through the columns without the table's checks, and a
+`StructArray` of a column read eagerly would slice and append rows with a
+stale row type.
 
 Lazy tables stop working when the file they read from is closed. The rows
 read from them do not.
