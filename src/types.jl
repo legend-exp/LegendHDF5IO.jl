@@ -1159,13 +1159,14 @@ _dataset_filters(compress::Symbol) =
     HDF5.Filters.Filter[HDF5.Filters.Shuffle(), HDF5.Filters.Deflate(3)]
 
 # The first array written is split evenly into n chunks of at most the cap,
-# which leave fewer than n rows unused:
+# which leave fewer than n rows unused. Without rows, a chunk takes the most
+# rows the cap allows:
 function _chunk_length(::Type{T}, sz_inner, sz_outer::Integer, compress::Symbol) where {T}
     cap = compress === :none ? max_chunk_bytes[] : max_compressed_chunk_bytes[]
     # Variable-length elements like strings are stored as references in the chunk:
     elsize = isbitstype(T) ? sizeof(T) : sizeof(Ptr{Cvoid})
     max_rows = max(1, fld(cap, elsize * prod(sz_inner)))
-    cld(sz_outer, cld(sz_outer, max_rows))
+    sz_outer > 0 ? cld(sz_outer, cld(sz_outer, max_rows)) : max_rows
 end
 
 @deprecate LHDataStore(f::AbstractString, access::AbstractString = "r") lh5open(f, access)
@@ -1286,8 +1287,8 @@ function create_entry(parent::LHDataStore, name::AbstractString,
         # sets the chunk size:
         data_size = size(data)
         sz_inner, sz_outer = data_size[begin:end-1], data_size[end]
-        sz_outer > 0 || throw(ArgumentError(
-            "Cannot infer a chunk size for \"$name\" from an empty array"))
+        all(>(0), sz_inner) || throw(ArgumentError(
+            "Cannot chunk \"$name\" of size $data_size, HDF5 chunks cannot have zero-sized dimensions"))
         dspace = (data_size, (sz_inner..., -1))
         chunk = (sz_inner..., _chunk_length(T, sz_inner, sz_outer, compress))
         HDF5.create_dataset(parent.data_store, name, dtype, dspace;
