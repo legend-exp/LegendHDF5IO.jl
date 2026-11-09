@@ -49,8 +49,11 @@ need to be read first for reductions without an `init` value, such as `sum` or
 `findall`, and for broadcasts that combine several of them.
 
 Datasets opened for writing can be modified in place within their current
-size (`E[1:10] = ...`), and `append!` grows them. Nested structures
-(`NamedTuple`s, tables, waveforms) are represented as HDF5 groups.
+size (`E[1:10] = ...`), and `append!` grows them. An in-place write whose
+source reads the dataset it writes to, like `E .= reverse(E)`, is refused,
+since DiskArrays writes chunk by chunk; read the source first with `[:]`.
+Nested structures (`NamedTuple`s, tables, waveforms) are represented as HDF5
+groups.
 
 ### Tables and waveforms
 
