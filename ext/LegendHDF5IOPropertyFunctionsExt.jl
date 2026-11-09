@@ -6,9 +6,15 @@ import PropertyFunctions
 using PropertyFunctions: PropertyFunction, PropSelFunction, PPath, PPaths, input_property_paths
 using LegendHDF5IO: AbstractLH5Table, LH5JoinedTable, LH5TypedTable, LH5LazyBroadcast, _join_part, _select, _selection_tree
 
-# The generic innermerge opens every column of every table to merge them:
-PropertyFunctions.innermerge(tbl::AbstractLH5Table, tbls...) =
-    LH5JoinedTable(map(_join_part, (tbl, tbls...))...)
+# The generic innermerge opens every column of every table to merge them, and
+# with an in-memory table first it wraps the lazy columns in a StructArray. A
+# lazy table in the first two positions is caught, not one behind two others.
+# The third method resolves the ambiguity:
+PropertyFunctions.innermerge(tbl::AbstractLH5Table, tbls...) = _lazy_join(tbl, tbls...)
+PropertyFunctions.innermerge(tbl, tbl2::AbstractLH5Table, tbls...) = _lazy_join(tbl, tbl2, tbls...)
+PropertyFunctions.innermerge(tbl::AbstractLH5Table, tbl2::AbstractLH5Table, tbls...) = _lazy_join(tbl, tbl2, tbls...)
+
+_lazy_join(tbls...) = LH5JoinedTable(map(_join_part, tbls)...)
 
 _path(::PPath{path}) where {path} = path
 

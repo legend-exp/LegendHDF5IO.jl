@@ -4,9 +4,9 @@
     LH5JoinedTable <: AbstractLH5Table
 
 The columns of several tables side by side, without reading them.
-`PropertyFunctions.innermerge` returns one for lazy tables, and so does
-`Tables.materializer` of a lazy table when given columns that read from
-disk.
+`PropertyFunctions.innermerge` returns one when its first or second table is
+lazy, and so does `Tables.materializer` of a lazy table when given columns
+that read from disk.
 
 The parts are lazy tables or `NamedTuple`s of columns. They must have the
 same length, which is compared when the length of the join is needed, so
