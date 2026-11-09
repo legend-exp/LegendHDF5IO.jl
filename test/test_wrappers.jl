@@ -1261,6 +1261,11 @@ struct AboveHalf end
                 @test (@pf $a * 2).(tbl) == 2 .* a
                 @test Set(opened(tbl)) == Set([:a])
                 @test filterby(@pf $b > 0)(tbl) == tbl[:][b .> 0]
+                # also in nested tables:
+                nested = lhd["nested"]
+                @test (@pf $y.b).(nested) === nested.y.b && (@pf $y.b * 2).(nested) == 2 .* b
+                @test PropertyFunctions.subcolumn(nested.y, :b) === nested.y.b
+                @test Set(opened(nested.y)) == Set([:b])
                 nt = (@pf (c = $a, d = $b)).(tbl)
                 @test nt isa LH5TypedTable && nt.c === tbl.a && nt.d == b
             end
