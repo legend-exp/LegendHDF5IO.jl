@@ -147,6 +147,12 @@ struct AboveHalf end
                         (rand(10), rand(10)), (0:0.2:1, Float64[0, 0.5, 1]))
                     @test setindex!(lhd, h, "h") |> isnothing
                     @test lhd["h"] == h
+                    # regular edges with decimal steps, which first, last and step alone do not rebuild:
+                    for (i, edges) in enumerate((range(67.829, step = 9.3299, length = 280), range(8.5175, step = 6.7482, length = 565)))
+                        h_dec = Histogram(edges, rand(length(edges) - 1))
+                        lhd["h_dec$i"] = h_dec
+                        @test lhd["h_dec$i"] == h_dec
+                    end
                 end
                 @testset "IO of EncodedArray" begin
                     codec = VarlenDiffArrayCodec()
