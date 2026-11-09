@@ -1465,6 +1465,11 @@ struct AboveHalf end
                 # other tables join with their columns:
                 @test innermerge(ta, (w = y,)).w === y
                 @test innermerge(ta, StructArray((w = y,))).w === y
+                # also in front of lazy tables, where a StructArray of the lazy columns would slice with a stale row type:
+                jm = innermerge(StructArray((w = y,)), ta)
+                @test jm isa LH5JoinedTable && propertynames(jm) == (:w, :x, :v) && jm.x === ta.x
+                @test jm[2:3] == innermerge(StructArray((w = y,)), ta[:])[2:3] && jm[2].v == v[2]
+                @test innermerge((w = y,), ta, tb) isa LH5JoinedTable
             end
         end
     end
