@@ -146,6 +146,18 @@ end
         @test _roundtrip(mvu) == mvu
     end
 
+    @testset "through an LHDataStore" begin
+        # the store's write options apply:
+        mktempdir(pwd()) do tmp
+            lh5open(joinpath(tmp, "tmp.lh5"), "w"; compress = :zstd) do lhd
+                x = rand(10)
+                writedata(lhd, "x", x)
+                @test readdata(lhd, "x") == x
+                @test !isempty(HDF5.get_create_properties(lhd.data_store["x"]).filters)
+            end
+        end
+    end
+
     @testset "error paths" begin
         mktempdir(pwd()) do tmp
             HDF5.h5open(joinpath(tmp, "tmp.h5"), "w") do f
