@@ -24,6 +24,9 @@ import DataAPI
 struct AboveHalf end
 (::AboveHalf)(row) = row.a > 0.5f0
 
+# Not const, so that functions using it do not infer:
+thr = 0
+
 # A lazy vector that counts its reads:
 struct CountedReads{T} <: AbstractLH5Vector{T}
     data::Vector{T}
@@ -1406,14 +1409,26 @@ end
             end
 
             lh5open(fn, "r") do lhd
-                # property functions use the column access, so they open only the columns they use:
+                # property functions broadcast lazily over the columns they use, which are the only ones opened:
                 tbl = lhd["tbl"]
-                @test (@pf $a * 2).(tbl) == 2 .* a
+                bc = (@pf $a * 2).(tbl)
+                @test bc isa LH5LazyBroadcast && eltype(bc) == Float32 && bc == 2 .* a && @inferred(bc[2:3]) == 2 .* a[2:3]
                 @test Set(opened(tbl)) == Set([:a])
                 @test filterby(@pf $b > 0)(tbl) == tbl[:][b .> 0]
-                # also in nested tables:
+                # tuples of columns, also of array-valued ones:
+                @test (@pf ($a, $b)).(tbl) isa LH5LazyBroadcast && (@pf ($a, $b)).(tbl) == collect(zip(a, b))
+                av = (@pf ($a, $vov)).(tbl)
+                @test av[2:3] == collect(zip(a[2:3], vov[2:3])) && av[2] == (a[2], vov[2])
+                # a function without properties needs the rows to count only:
+                @test (@pf 1).(tbl) == ones(Int, n)
+                # functions that do not infer take their type from the first block of rows:
+                mask = (@pf $b > thr).(tbl)
+                @test eltype(mask) == Bool && mask == (b .> 0) && tbl.a[mask] == a[b .> 0]
+                @test filterby(@pf $b > thr)(tbl) == tbl[:][b .> 0]
+                # also in nested tables, which open only the columns used:
                 nested = lhd["nested"]
-                @test (@pf $y.b).(nested) === nested.y.b && (@pf $y.b * 2).(nested) == 2 .* b
+                @test (@pf $y.b * 2).(nested) == 2 .* b && Set(opened(nested.y)) == Set([:b]) && isempty(opened(nested.x))
+                @test (@pf $y.b).(nested) === nested.y.b
                 @test PropertyFunctions.subcolumn(nested.y, :b) === nested.y.b
                 @test Set(opened(nested.y)) == Set([:b])
                 nt = (@pf (c = $a, d = $b)).(tbl)
@@ -1452,6 +1467,12 @@ end
                 @test findall(mask) == findall(b .> 0) && count(mask) == count(b .> 0)
                 @test sel[mask] == sel[:][b .> 0] && sel.c[mask] == a[b .> 0]
                 @test filterby(@pf $d > 0)(sel) == sel[:][b .> 0]
+                mt = (@pf $d > thr).(sel)
+                @test mt isa LH5LazyBroadcast && eltype(mt) == Bool && mt == (b .> 0) && sel.c[mt] == a[b .> 0]
+                @test filterby(@pf $d > thr)(sel) == sel[:][b .> 0]
+                # a union of block types gives the union of their element types:
+                cm = (@pf $c > 0.5f0 ? $c : missing).(sel)
+                @test eltype(cm) == Union{Missing, Float32} && isequal(collect(cm), [x > 0.5f0 ? x : missing for x in a])
                 @test occursin("LH5TypedTable(2 columns", sprint(show, sel))
                 @test_throws ArgumentError append!(sel, sel[1:1])
                 # ragged columns keep their type in blocks:
@@ -1619,9 +1640,15 @@ end
                 ta, tb = lhd["a"], lhd["b"]
                 j = innermerge(ta, tb)
                 @test length(opened(ta)) <= 1 && length(opened(tb)) <= 1
+                # a function broadcast over a join opens the columns it uses only, in the tables that own them:
+                bc = (@pf $y * $x).(j)
+                @test bc isa LH5LazyBroadcast && isempty(opened(ta)) && opened(tb) == Set([:x, :y])
+                @test bc == y .* (2 .* x)
                 @test j.y[:] == y && j.x[:] == 2 .* x
                 @test :v ∉ opened(ta)
                 @test j[:] == innermerge(ta[:], tb[:])
+                @test (@pf ($y, $v)).(j)[2:3] == collect(zip(y[2:3], v[2:3]))
+                @test filterby(@pf $y > thr)(j) == j[:][y .> 0] && (@pf $x + $w).(innermerge(ta, (w = y,))) == x .+ y
                 # other tables join with their columns:
                 @test innermerge(ta, (w = y,)).w === y
                 @test innermerge(ta, StructArray((w = y,))).w === y
@@ -1685,9 +1712,11 @@ end
                 # paths into columns that are not tables, like waveforms, take the column whole:
                 sw = (@pf (sig = $wf.signal, b = $b)).(c)
                 @test sw[10].sig == mem[3].wf[3].signal && sw[1:2].sig == [w.signal for w in mem[1].wf[1:2]]
-                @test (@pf $x * 2).(c) == 2 .* xs
+                bc = (@pf $x * 2).(c)
+                @test bc isa LH5LazyBroadcast && bc == 2 .* xs && @inferred(bc[6:9]) == 2 .* xs[6:9]
                 @test @inferred(broadcast(@pf($x * 2), (@pf (; $x)).(c))) == 2 .* xs
-                @test filterby(@pf $b > 0)(c) == rows[bs .> 0]
+                @test (@pf ($x, $v)).(c)[6:9] == collect(zip(xs, joined(t -> t.v)))[6:9]
+                @test filterby(@pf $b > 0)(c) == rows[bs .> 0] && filterby(@pf $b > thr)(c) == rows[bs .> 0]
                 @test Tables.columns(c) isa LH5LazyColumns
                 # vecflattened and reduce(vcat, ...) chain as vcat does, and chains of chains stay flat:
                 @test vecflattened(ts) isa LH5ChainedTable && vecflattened(ts).b[:] == bs
@@ -1741,7 +1770,7 @@ end
                 append!(lhd["b"].y, [7])
                 c = vcat(lhd["a"], lhd["b"])
                 @test_throws DimensionMismatch c.y
-                @test_throws DimensionMismatch (@pf $x + $y).(c)
+                @test_throws DimensionMismatch (@pf $y * 2).(c)
                 # also when a join reads the rows of some columns only:
                 j = innermerge(c, (x = zeros(Int, length(c)),))
                 @test_throws DimensionMismatch j[:]
@@ -1859,6 +1888,14 @@ end
                 pb = LH5JoinedTable((v = VectorOfVectors([3, 4], Int32[1, 3]),))
                 sv2 = (@pf (; $v)).(vcat(pa, pb))
                 @test sv2[:].v == [[1], [2], [3, 4]] && sv2[3:3].v == [[3, 4]] && sv2[[3, 1]].v == [[3, 4], [1]]
+                # a function that does not infer takes its type from the first block, and the other blocks convert to it:
+                cab = vcat(lhd["a"], lhd["b"])
+                bm = (@pf $x > thr + 1 ? $x + thr : missing).(cab)
+                @test eltype(bm) == Union{Missing, Int} && isequal([v for v in bm], [missing, 2, 3, 4]) && isequal(bm[:], [missing, 2, 3, 4])
+                bstr = (@pf $x > thr + 2 ? "big" : $x + thr).(cab)
+                @test eltype(bstr) == Int && bstr[1:2] == [1, 2]
+                @test_throws ArgumentError bstr[:]
+                @test_throws ArgumentError [v for v in bstr]
             end
 
             hs = lh5open.(fns)
@@ -1868,6 +1905,9 @@ end
                 c = vcat(ts...)
                 @test first(c, 3).x == xs[1:3]
                 @test isempty(keys(LegendHDF5IO._table_columns(ts[3])))
+                # a function broadcast opens the columns it uses only:
+                bc = (@pf $x * $b).(c)
+                @test all(t -> keys(LegendHDF5IO._table_columns(t)) ⊆ Set([:x, :b]), ts[2:3]) && bc[1:3] == xs[1:3] .* bs[1:3]
             finally
                 close.(hs)
             end
@@ -1899,8 +1939,9 @@ end
                 @test @inferred((t -> t.sub)(s)) isa LH5TypedTable
                 @test s.sub[:].x == [1.0, 2.0, 3.0] && s.sub.x[:] == [1.0, 2.0, 3.0]
                 @test_throws ArgumentError s[:]
-                # a function broadcast over the selection reads only the columns it uses:
+                # a function broadcast over the selection or the chain reads only the columns it uses:
                 @test @inferred(broadcast(@pf($sub.x * 2), s)) == [2.0, 4.0, 6.0]
+                @test (@pf $sub.x * 2).(fc["nested"]) == [2.0, 4.0, 6.0]
             end
             # columns of another file cannot pose as columns of a table:
             for k in 1:2
@@ -2072,6 +2113,15 @@ end
                 r1 = @inferred Nothing iterate(s)
                 r2 = @inferred Nothing iterate(s, last(r1))
                 @test first(r1).xx == xs[1] && first(r2).xx == xs[2]
+            end
+            # so does a function broadcast over a file chain, also one whose type is taken from the first block:
+            lh5open(fns; max_open = 1) do fc
+                t = fc["t"]
+                bc, mask = (@pf $x + $sub.c).(t), (@pf $x > thr + 0.5).(t)
+                @test bc isa LH5LazyBroadcast && eltype(mask) == Bool && collect(keys(fc.files)) == [1] && isempty(fc.checked)
+                @test bc == xs .+ joined(t -> t.sub.c) && mask == (xs .> 0.5)
+                @test !any(((k, path),) -> occursin("/v", path), fc.checked)
+                @test filterby(@pf $x > thr + 0.5)(t).x == xs[xs .> 0.5]
             end
             # a selection over a chain of selections opens the first file only, too:
             lh5open(fns; max_open = 1) do fc

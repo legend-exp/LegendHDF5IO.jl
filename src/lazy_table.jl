@@ -35,8 +35,9 @@ front, the element type of a column only once the column is opened, so the
 row type `R` is the abstract `NamedTuple`, except for typed tables. Accessing
 a column, with `tbl.colname` or `Tables.getcolumn`, opens that column and no
 other, and `Tables.columns(tbl)` is a dictionary of the columns (see
-[`LH5LazyColumns`](@ref)). Column-wise broadcasts, such as PropertyFunctions,
-open only the columns they use, and PropertyFunctions selections return typed
+[`LH5LazyColumns`](@ref)). A PropertyFunction broadcast over a lazy table is
+an [`LH5LazyBroadcast`](@ref) that reads only the columns the function uses,
+a pure column accessor returns the column, and selections return typed
 tables.
 
 Treating the table as an array opens all columns. Indexing with a range,

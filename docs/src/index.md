@@ -138,11 +138,17 @@ block of rows come from the first file, so rows read with a range or an index
 vector, iteration and `filterby` have inferable types. The columns of a typed
 table, `sel.e`, are the lazy columns of the table it selects from, while a
 nested table, `sel.geds`, is a typed table of its selected columns, whose type
-follows from the type of `sel`, so `sel.geds.<TAB>` completes in the REPL. A
-PropertyFunction broadcast over a typed table, `(@pf $e^2).(sel)`, returns an
-[`LH5LazyBroadcast`](@ref): a lazy vector that reads the rows it needs and
-applies the function to them block by block, with the element type inferred
-from the row type, so the broadcast has an inferable type as well.
+follows from the type of `sel`, so `sel.geds.<TAB>` completes in the REPL.
+
+A PropertyFunction broadcast over any lazy table, `(@pf $energy^2).(evt)` or
+`(@pf $e^2).(sel)`, returns an [`LH5LazyBroadcast`](@ref): a lazy vector that
+reads the rows it needs of the columns the function uses and applies the
+function to them block by block. Its element type is inferred from the row
+type or, failing that, taken from the first block of rows. Over a typed table
+the broadcast has an inferable type. Over other tables the row type is fixed
+from the columns used, as for a selection, so a broadcast over a file chain
+opens the first file only. A pure column accessor, `(@pf $energy).(evt)`,
+returns the column.
 
 ### Joining and concatenating tables
 
