@@ -349,6 +349,9 @@ Tables.getcolumn(tbl::AbstractLH5Table, i::Int) = getproperty(tbl, _table_colnam
 Tables.columnindex(tbl::AbstractLH5Table, name::Symbol) =
     something(findfirst(==(name), _table_colnames(tbl)), 0)
 Tables.columntype(tbl::AbstractLH5Table, name::Symbol) = eltype(Tables.getcolumn(tbl, name))
+# Tables.jl would look these up in the schema, which is not known:
+Tables.columnindex(cols::LH5LazyColumns, name::Symbol) = Tables.columnindex(_columns_table(cols), name)
+Tables.columntype(cols::LH5LazyColumns, name::Symbol) = Tables.columntype(_columns_table(cols), name)
 # A view would read the rows one at a time, so the hint is ignored:
 Tables.subset(tbl::AbstractLH5Table, idxs; viewhint::Union{Bool, Nothing} = nothing) = tbl[idxs]
 # Tables.jl would read a view row by row and infer its columns from the rows,
