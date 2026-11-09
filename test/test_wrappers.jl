@@ -89,6 +89,17 @@ struct AboveHalf end
                     GC.enable(true)
                     @test n1 - n0 == 1
                 end
+                @testset "IO of plain vectors of vectors" begin
+                    vv = [rand(2), Float64[], rand(3)]
+                    @test setindex!(lhd, vv, "vv") |> isnothing
+                    @test lhd["vv"][:] == vv
+                    vvu = [rand(2)u"keV", rand(1)u"keV"]
+                    lhd["vvu"] = vvu
+                    @test lhd["vvu"][:] == vvu
+                    rows = [(a = [1.0, 2.0], b = 1), (a = [3.0], b = 2)]
+                    lhd["rows"] = rows
+                    @test lhd["rows"][:] == rows
+                end
                 @testset "IO of VectorOfSimilarVectors" begin
                     vofsimvec = convert(VectorOfSimilarVectors,
                         [rand(-5:5, 100) for _ in 1:50])
