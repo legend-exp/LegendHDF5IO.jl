@@ -390,26 +390,17 @@ end
 
 
 """
-    writedata(output::HDF5.H5DataStore, name::AbstractString, x,
+    writedata(output::Union{HDF5.H5DataStore, LHDataStore}, name::AbstractString, x,
         fulldatatype::DataType = typeof(x))
 
-Write the value `x` under `name` to `output`, via `create_entry`.
+Write the value `x` under `name` to `output`, via `create_entry`, with the
+`usechunks` and `compress` options of an `LHDataStore`.
 
 Passing `fulldatatype` overrides the "datatype" attribute written for `x`,
 and passing `Nothing` omits it.
 """
-function LegendDataTypes.writedata(
-    output::HDF5.H5DataStore, name::AbstractString, x,
-    fulldatatype::DataType = typeof(x)
-)
-    create_entry(LHDataStore(output, false), name, x)
-    if fulldatatype == Nothing
-        hasattribute(output[name], :datatype) && HDF5.delete_attribute(output[name], "datatype")
-    elseif fulldatatype != typeof(x)
-        setdatatype!(output[name], fulldatatype)
-    end
-    nothing
-end
+LegendDataTypes.writedata(output::HDF5.H5DataStore, name::AbstractString, x,
+    fulldatatype::DataType = typeof(x)) = writedata(LHDataStore(output, false), name, x, fulldatatype)
 
 
 function _flatview_of_array_of_ntuple(A::AbstractArray{<:NTuple{L,Any}, N}) where {L,N}

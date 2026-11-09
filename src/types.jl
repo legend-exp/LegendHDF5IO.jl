@@ -1217,7 +1217,19 @@ Base.setindex!(lh::LHDataStore, v, i::Any, j::Any...) =
     setindex!(lh, v, join(string.((i, j...)), "/"))
 
 LegendDataTypes.readdata(input::LHDataStore, args...; kwargs...) = readdata(input.data_store, args...; kwargs...)
-LegendDataTypes.writedata(output::LHDataStore, args...; kwargs...) = writedata(output.data_store, args...; kwargs...)    
+
+function LegendDataTypes.writedata(output::LHDataStore, name::AbstractString, x,
+    fulldatatype::DataType = typeof(x))
+
+    output[name] = x
+    ds = output.data_store
+    if fulldatatype == Nothing
+        hasattribute(ds[name], :datatype) && HDF5.delete_attribute(ds[name], "datatype")
+    elseif fulldatatype != typeof(x)
+        setdatatype!(ds[name], fulldatatype)
+    end
+    nothing
+end
 
 
 # write <:Real
