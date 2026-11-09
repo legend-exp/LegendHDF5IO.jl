@@ -940,6 +940,11 @@ struct AboveHalf end
                         @test_throws ArgumentError add_entries!(lhd, "tbl_dest", StructArray((e = [1, 2], a = [0, 0])))
                         @test propertynames(lhd["tbl_dest"]) == (:a, :b, :c, :d)
                         @test !haskey(lhd.data_store, "tbl_dest/e")
+                        # a failed write takes back the entries written before it:
+                        @test_throws ArgumentError add_entries!(lhd, "tbl_dest", StructArray((e = [1, 2], f = [missing, 1.0])))
+                        @test propertynames(lhd["tbl_dest"]) == (:a, :b, :c, :d)
+                        add_entries!(lhd, "tbl_dest", StructArray((e = [9, 10],)))
+                        @test lhd["tbl_dest"].e[:] == [9, 10]
                     end
                 end
                 @testset verbose=true "NamedTuples" begin

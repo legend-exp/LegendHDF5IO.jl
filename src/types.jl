@@ -1573,8 +1573,16 @@ export add_entries!
 function _add_entries!(lhd::LHDataStore, i::AbstractString, src::NamedTuple, stored)
     clash = intersect(stored, keys(src))
     isempty(clash) || throw(ArgumentError("\"$i\" already has entries $clash"))
-    for k in keys(src)
-        lhd["$(i)/$(k)"] = src[k]
+    written = Symbol[]
+    try
+        for k in keys(src)
+            lhd["$(i)/$(k)"] = src[k]
+            push!(written, k)
+        end
+    catch
+        # Entries left out of the datatype would block adding them again:
+        foreach(k -> HDF5.delete_object(lhd.data_store, "$(i)/$(k)"), written)
+        rethrow()
     end
     (stored..., keys(src)...)
 end
