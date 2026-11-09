@@ -24,6 +24,15 @@ import DataAPI
 struct AboveHalf end
 (::AboveHalf)(row) = row.a > 0.5f0
 
+# A lazy vector that counts its reads:
+struct CountedReads{T} <: AbstractLH5Vector{T}
+    data::Vector{T}
+    reads::Base.RefValue{Int}
+end
+CountedReads(data) = CountedReads(collect(data), Ref(0))
+Base.length(v::CountedReads) = length(v.data)
+LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idxs])
+
 @testset verbose=true "test wrapper" begin
     @testset verbose=true "reading and writing" begin
         mktempdir(pwd()) do tmp
@@ -1218,6 +1227,9 @@ struct AboveHalf end
                 @test sel isa StructArray && sel.a == a[a .> 0.5f0]
                 @test findall(r -> r.a > 0.5f0, tbl) == findall(a .> 0.5f0)
                 @test findall(in(rows[2:3]), tbl) == [2, 3]
+                @test findmax(r -> r.a, tbl) == findmax(a) && findmin(r -> r.b, tbl) == findmin(b)
+                @test findfirst(r -> r.a > 0.5f0, tbl) == findfirst(>(0.5f0), a) && findlast(r -> r.a > 0.5f0, tbl) == findlast(>(0.5f0), a)
+                @test isnothing(findfirst(r -> r.a > 1, tbl)) && isnothing(findlast(r -> r.a > 1, tbl))
                 sorted = sort(tbl; by = r -> r.b)
                 @test sorted isa StructArray && sorted.b == sort(b)
                 @test sortperm(tbl; by = r -> r.b) == sortperm(b)
@@ -1253,6 +1265,14 @@ struct AboveHalf end
                 @test sum(r -> r.x, tbl) == sum(x)
                 @test filter(r -> iseven(r.x), tbl).x == filter(iseven, x)
                 @test collect(Iterators.drop(tbl, m - 2)) == [(x = x[m - 1],), (x = x[m],)]
+                # so do searches, which read each block at most once:
+                cv, mask = CountedReads(x), CountedReads(x .> 0)
+                @test findmax(cv) == findmax(x) && findmin(cv) == findmin(x) && argmax(cv) == argmax(x) && argmin(cv) == argmin(x)
+                @test findmax(abs, cv) == findmax(abs, x) && findmin(abs, cv; dims = 1) == findmin(abs, x; dims = 1)
+                @test findfirst(>(0), cv) == findfirst(>(0), x) && findlast(>(0), cv) == findlast(>(0), x)
+                @test findfirst(mask) == findfirst(x .> 0) && findlast(mask) == findlast(x .> 0)
+                nblocks = cld(m, LegendHDF5IO.rows_per_block[])
+                @test cv.reads[] <= 8 * nblocks && mask.reads[] <= 2 * nblocks
             end
 
             lh5open(fn, "r") do lhd
