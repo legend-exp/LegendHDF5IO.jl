@@ -1112,6 +1112,8 @@ struct AboveHalf end
                 # a StructArray over the disk-backed columns would slice and append with a stale row type:
                 @test_throws ArgumentError StructArray(tbl)
                 @test_throws ArgumentError TypedTables.Table(tbl)
+                @test_throws ArgumentError TypedTables.FlexTable(tbl)
+                @test_throws ArgumentError TypedTables.FlexTable{1}(tbl)
                 @test TypedTables.Table(tbl[1:2]) isa TypedTables.Table
                 @test_throws ArgumentError StructVector(tbl)
                 @test_throws ArgumentError convert(StructArray, tbl)

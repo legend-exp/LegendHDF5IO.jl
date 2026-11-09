@@ -44,8 +44,9 @@ iteration reads the rows in blocks, as described for
 [`AbstractLH5Vector`](@ref). `vcat` of lazy tables chains them.
 Concatenation with other arrays is refused if a table is among the first two
 arguments. A table behind two other arrays is concatenated row by row.
-`StructArray(tbl)` and `TypedTables.Table(tbl)` are refused as well: they
-would append through the columns without the table's checks, and a
+`StructArray(tbl)`, `TypedTables.Table(tbl)` and `TypedTables.FlexTable(tbl)`
+are refused as well: they would append through the columns without the
+table's checks, and a
 `StructArray` of a column read eagerly would slice and append rows with a
 stale row type.
 
@@ -181,7 +182,7 @@ _typed_column(col::AbstractLH5Table) = _typed_table(col)
 
 # Once a column was read eagerly, a StructArray over the columns would slice
 # and append rows with a stale row type and bypass the append checks. The
-# TypedTables extension refuses Table(tbl) the same way:
+# TypedTables extension refuses Table(tbl) and FlexTable(tbl) the same way:
 StructArrays.StructArray(::AbstractLH5Table; kwargs...) = throw(ArgumentError(
     "Lazy tables do not convert to StructArrays, read the rows with tbl[:]"))
 
