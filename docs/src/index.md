@@ -367,3 +367,7 @@ collected or written, while `map` is eager. Reading Bool arrays gives an
 file, the table name and the new columns, without the destination argument.
 Custom types register their LH5 datatype with
 `LegendHDF5IO.register_datatype!` instead of extending `datatype_to_string`.
+Encoded vectors of vectors are now written with the datatype
+`array<1>{encoded_array<1>{...}}` of the LH5 specification, as legend-pydataobj
+writes them, and files written by 0.1 still read, but not in one file chain
+with newer files.

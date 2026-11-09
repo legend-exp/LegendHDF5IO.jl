@@ -272,7 +272,8 @@ LH5Array(ds::HDF5.H5DataStore, ::Type{<:VectorOfEncodedArrays{T, 1} where {T}}
     
     data_vec = LH5Array(
         ds["encoded_data"])
-    size_vec::Vector{NTuple{1, Int}} = LH5Array(ds["decoded_size"])
+    # Integers, or 1-tuples in files written by LegendHDF5IO 0.1:
+    size_vec = [(Int(only(s)),) for s in LH5Array(ds["decoded_size"])[:]]
     U = haskey(ds, "sample_data") ? eltype(ds["sample_data"]) : Int32
     codec_name = Symbol(getattribute(ds, :codec, String))
     C = LegendDataTypes.array_codecs.by_name[codec_name]
@@ -1508,7 +1509,7 @@ function create_entry(parent::LHDataStore, name::AbstractString,
     data::T; kwargs...) where {C, U, T <: VectorOfEncodedArrays{U, 1, C}}
 
     create_entry(parent, name*"/encoded_data", data.encoded; kwargs...)
-    create_entry(parent, name*"/decoded_size", data.innersizes)
+    create_entry(parent, name*"/decoded_size", only.(data.innersizes))
         
         # quick fix for avoiding hardcoding eltype while reading EncodedArray's
     parent[name*"/sample_data"] = U(1.0)
