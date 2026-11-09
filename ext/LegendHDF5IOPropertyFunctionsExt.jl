@@ -16,6 +16,10 @@ PropertyFunctions.innermerge(tbl::AbstractLH5Table, tbl2::AbstractLH5Table, tbls
 
 _lazy_join(tbls...) = LH5JoinedTable(map(_join_part, tbls)...)
 
+# Nested paths, `$y.b`, would otherwise read the whole nested table:
+@inline PropertyFunctions.subcolumn(col::AbstractLH5Table, name::Symbol) = getproperty(col, name)
+@inline PropertyFunctions.subcolumn(col::AbstractLH5Table, ::Val{name}) where {name} = getproperty(col, name)
+
 _path(::PPath{path}) where {path} = path
 
 # A selection fixes the row type from the first file and reads the selected
