@@ -11,8 +11,9 @@ Indexing with a range, index vector or mask reads the selected elements, and
 `v[:]` reads them all. Iteration reads the elements in blocks of a few
 thousand (see [`LegendHDF5IO.rows_per_block`](@ref)), so loops,
 comprehensions and `map` read neither one element at a time nor everything at
-once. `filter`, `findall` and reductions go through iteration, while `sort`
-and `sortperm` read the vector first.
+once. `filter`, searches such as `findall`, `findfirst` and `findmax`, and
+reductions go through iteration, while `sort` and `sortperm` read the vector
+first.
 
 # Implementation
 
@@ -251,8 +252,9 @@ end
 
 Base.broadcastable(tbl::AbstractLH5Table) = _typed_table(tbl)
 
-# Base copies, filters and reduces arrays by indexing them, which would read
-# one element at a time. These go through iteration or read the vector at once:
+# Base copies, filters, searches and reduces arrays by indexing them, which
+# would read one element at a time. These go through iteration or read the
+# vector at once:
 function Base.copyto!(dest::Array, src::AbstractLH5Vector)
     length(dest) < length(src) && throw(BoundsError(dest, LinearIndices(src)))
     for (i, x) in zip(eachindex(dest), src)
@@ -271,6 +273,19 @@ Base.findall(mask::AbstractLH5Vector{Bool}) = findall(mask[:])
 Base.findall(f::Function, v::AbstractLH5Vector) = findall(map(f, v))
 Base.findall(f::Base.Fix2{typeof(in)}, v::AbstractLH5Vector) = findall(map(f, v))
 Base.filter(f, v::AbstractLH5Vector) = v[findall(map(f, v))]
+Base.findmax(f, v::AbstractLH5Vector; dims = :) = findmax(map(f, v); dims)
+Base.findmin(f, v::AbstractLH5Vector; dims = :) = findmin(map(f, v); dims)
+Base.findmax(v::AbstractLH5Vector; dims = :) = findmax(identity, v; dims)
+Base.findmin(v::AbstractLH5Vector; dims = :) = findmin(identity, v; dims)
+function Base.findfirst(f::Function, v::AbstractLH5Vector)
+    for (i, x) in enumerate(v)
+        f(x) && return i
+    end
+    nothing
+end
+Base.findlast(f::Function, v::AbstractLH5Vector) = findlast(map(f, v))
+Base.findfirst(mask::AbstractLH5Vector{Bool}) = findfirst(identity, mask)
+Base.findlast(mask::AbstractLH5Vector{Bool}) = findlast(identity, mask)
 Base.sort(v::AbstractLH5Vector; kw...) = sort(v[:]; kw...)
 Base.sortperm(v::AbstractLH5Vector; kw...) = sortperm(v[:]; kw...)
 
