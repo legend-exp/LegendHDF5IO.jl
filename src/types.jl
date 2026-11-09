@@ -1048,11 +1048,35 @@ function _append_impl!(dest::StructArray{<:NamedTuple}, src)
         "Cannot append table with columns $(keys(scols)) to table with columns $(keys(dcols))"))
     allequal(map(length, Tuple(scols))) || throw(ArgumentError(
         "The columns of the table to append differ in length"))
-    for k in keys(dcols)
-        _append_impl!(dcols[k], scols[k])
+    sources = map(k -> _appendable_source(dcols[k], scols[k]), keys(dcols))
+    for (col, source) in zip(Tuple(dcols), sources)
+        _append_impl!(col, source)
     end
     dest
 end
+
+# The data a column append writes, converted to the column's element type
+# before anything is written, so that a table append finds a column that
+# cannot take its data before any column has grown:
+_appendable_source(dest, src) = src
+_appendable_source(::LH5Array{T, N}, src::AbstractArray) where {T, N} = convert(Array{T, N}, src)
+function _appendable_source(dest::LH5VoV, src::AbstractVector{<:AbstractVector})
+    v = src isa VectorOfVectors ? src : VectorOfVectors(src)
+    ptr = ArraysOfArrays.internal_element_ptr(v)
+    VectorOfVectors(convert(Vector{eltype(fused(dest))}, fused(v)[first(ptr):last(ptr) - 1]), ptr .- (first(ptr) - 1))
+end
+function _appendable_source(dest::LH5AoSA, src::AbstractVector{<:AbstractArray})
+    a = src isa ArrayOfSimilarArrays ? src : ArrayOfSimilarArrays(src)
+    T = eltype(fused(dest))
+    ArrayOfSimilarArrays{T, ndims(eltype(a)), ndims(a)}(convert(Array{T}, flatview(a)))
+end
+_appendable_source(dest::LH5VectorOfRDWaveforms, src::VectorOfRDWaveforms) =
+    ArrayOfRDWaveforms((src.time, _appendable_source(dest.signal, src.signal)))
+function _appendable_source(dest::StructArray{<:NamedTuple}, src)
+    dcols, scols = StructArrays.components(dest), Tables.columntable(src)
+    StructArray(NamedTuple{keys(dcols)}(map(k -> _appendable_source(dcols[k], scols[k]), keys(dcols))))
+end
+_appendable_source(dest::LH5LazyTable, src) = _appendable_source(_typed_table(dest), src)
 
 _append_impl!(dest::LH5LazyTable, src) = _append_table!(dest, src)
 _append_impl!(dest::StructArray{<:NamedTuple}, src::EncodedArray) =

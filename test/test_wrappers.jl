@@ -866,6 +866,13 @@ LegendHDF5IO._getindex_rows(v::CountedReads, idxs) = (v.reads[] += 1; v.data[idx
                     @test_throws InexactError append!(lhd["vv_narrow"], VectorOfVectors([collect(1:300)]))
                     @test lhd["vv_narrow"][:] == [[1, 2], [3]]
                 end
+                @testset "a column that cannot take its data stops the append before any column grows" begin
+                    lhd["tbl_conv"] = StructArray((a = Float32[1, 2, 3], b = Int32[4, 5, 6], v = VectorOfVectors([[1.0], [2.0, 3.0], [4.0]])))
+                    before = lhd["tbl_conv"][:]
+                    @test_throws Exception append!(lhd["tbl_conv"], StructArray((a = [8f0], b = ["x"], v = VectorOfVectors([[5.0]]))))
+                    @test_throws Exception append!(lhd["tbl_conv"], StructArray((a = [8f0], b = Int32[9], v = VectorOfVectors([["s"]]))))
+                    @test lhd["tbl_conv"][:] == before
+                end
                 @testset "adding columns after appends" begin
                     lhd["tbl_grow"] = StructArray((v = VectorOfVectors([[1], [2, 3]]),))
                     append!(lhd["tbl_grow"], StructArray((v = VectorOfVectors([[4]]),)))
