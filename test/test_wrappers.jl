@@ -378,6 +378,14 @@ struct AboveHalf end
                 # map is eager, as in Base, while broadcasting is lazy:
                 @test map(v -> 2v, X) isa Vector
                 @test map(v -> 2v, X) == x * 2u"keV"
+                # lazy unitful arrays are written like their contents:
+                lh5open(joinpath(dir, "unitful_copy.lh5"), "w") do dst
+                    dst["x"] = X
+                    dst["v"] = view(X, 10:20)
+                    dst["bc"] = lhd["small"] .* 0.5u"keV"
+                    @test dst["x"][:] == x * u"keV" && dst["v"][:] == x[10:20] * u"keV"
+                    @test dst["bc"][:] == Float32[1, 2, 3] .* 0.5u"keV"
+                end
                 # explicit reads stay eager and type-stable:
                 @test @inferred(X[1:10]) == x[1:10] * u"keV"
                 @test @inferred(X[[1, 5, 40_000]]) == x[[1, 5, 40_000]] * u"keV"
