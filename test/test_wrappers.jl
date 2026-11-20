@@ -388,6 +388,14 @@ end
                 end
             end
 
+            # selections of nested ragged arrays are read eagerly at every
+            # level, they outlive the file:
+            vvv = VectorOfVectors(VectorOfVectors([rand(rand(0:3)) for _ in 1:30]), [1, 4, 4, 10, 31])
+            lh5open(lhd -> lhd["vvv"] = vvv, joinpath(tmp, "nested.lh5"), "w")
+            for idxs in ([3, 1, 3], [true, false, true, true])
+                @test lh5open(lhd -> lhd["vvv"][idxs], joinpath(tmp, "nested.lh5")) == vvv[idxs]
+            end
+
             # sparse index patterns on contiguous-layout data trigger
             # single-read scattered selections (point selection for vectors,
             # hyperslab-run union for higher dimensions):
