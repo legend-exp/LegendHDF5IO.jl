@@ -30,7 +30,7 @@ LegendHDF5IOPropertyFunctionsExt = "PropertyFunctions"
 LegendHDF5IOTypedTablesExt = "TypedTables"
 
 [compat]
-ArraysOfArrays = "1.4.1"
+ArraysOfArrays = "1.5"
 DataAPI = "1.8"
 DiskArrays = "0.4.25"
 EncodedArrays = "0.5"
